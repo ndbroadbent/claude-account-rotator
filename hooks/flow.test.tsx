@@ -227,6 +227,8 @@ function world(on: On, w: World, store: Record<string, unknown>): MockClock {
   on('http.fetch', async (_$, e) => {
     if (e.init?.socketPath !== `${HOME}/.claude/account-rotator/coordinator.sock`) throw new Error(`unexpected fetch: ${e.url}`)
     const url = new URL(e.url)
+    // Claude Code aborts a `$.http.fetch` with no answer after 30 s: a long poll must ask for less.
+    if (Number(url.searchParams.get('wait') ?? 0) >= 30_000) throw new Error(`a long poll waits past $.http.fetch's 30 s: ${e.url}`)
     const body = e.init.body === undefined ? undefined : JSON.parse(String(e.init.body))
     const answer = await coordinator.handle({ method: e.init.method ?? 'GET', path: url.pathname, query: Object.fromEntries(url.searchParams), body })
     return { value: { status: answer.status, ok: answer.status < 300, headers: {}, text: JSON.stringify(answer.body) } }

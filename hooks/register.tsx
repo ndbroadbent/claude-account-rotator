@@ -51,8 +51,8 @@ const CONFIRM_GIVE_UP_MS = 4 * 60_000
 const REFRESH_GUARD_MS = 8 * 60_000
 /** How long the mod waits on Claude in Chrome to list its browsers, connecting first, before going on without. */
 const CHROME_WAIT_MS = 15_000
-/** How long a long poll on the coordinator waits for a change. */
-const WAIT_MS = 50_000
+/** How long a long poll on the coordinator waits for a change: under the 30 s Claude Code gives a `$.http.fetch` before it aborts. */
+const WAIT_MS = 25_000
 /** A response's usage goes to the coordinator when it moved by this many points, or this long after the last. */
 const REPORT_POINTS = 1
 const REPORT_EVERY_MS = 60_000

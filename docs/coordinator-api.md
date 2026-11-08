@@ -24,7 +24,7 @@ HTTP/1.1 over a Unix domain socket:
 | Method and path | Body | Answer |
 | --- | --- | --- |
 | `GET /hello` | | `{ name, version, pid, startedAt }` |
-| `GET /state?since=V&wait=MS&session=ID` | | `State`. With `since` equal to the current `version`, the answer waits until the state changes or `wait` ms pass (at most 55000), then answers the current state. `session` marks that session alive. |
+| `GET /state?since=V&wait=MS&session=ID` | | `State`. With `since` equal to the current `version`, the answer waits until the state changes or `wait` ms pass (at most 55000), then answers the current state. `session` marks that session alive. A Claude Code session asks for 25000 at most: `$.http.fetch` aborts after 30 s. |
 | `POST /sessions` | `{ id, pid?, slot, cwd?, isInteractive }` | `{ accountId, state }`. Registers a session on the login whose `slot` it reads; an unknown slot becomes a new login. |
 | `PATCH /sessions/:id` | `{ accountId?, isBlocked?, isPending? }` | `{ state }` |
 | `DELETE /sessions/:id` | | `{ ok: true }` |

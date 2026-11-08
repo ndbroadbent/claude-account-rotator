@@ -2,6 +2,10 @@
 
 What each version of the account rotator changed. To get each one as Claude Code starts, turn on auto-update: in `/plugin`, open **Marketplaces**, pick **claude-account-rotator** and choose **Enable auto-update**. To update by hand, run `claude plugin marketplace update claude-account-rotator`, then `claude plugin update account-rotator@claude-account-rotator`, and start a new session.
 
+## 0.4.1 - 2026-11-09
+
+- **Fixes "Can't reach the account coordinator"** in every session that stayed quiet for 30 seconds. A session's wait for the coordinator's changes asked for 50 seconds, past the 30 seconds Claude Code gives a plugin's request before it gives up. It now asks for 25.
+
 ## 0.4.0 - 2026-11-09
 
 The first version of this fork ([ivokund/claude-account-rotator](https://github.com/ivokund/claude-account-rotator) is the original).
