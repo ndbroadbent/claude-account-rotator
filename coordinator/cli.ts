@@ -255,7 +255,13 @@ async function install(): Promise<void> {
   fs.writeFileSync(plistPath(), plist())
   launchctl('bootout', `${domain()}/${LABEL}`)
   await waitFor(async () => (await hello()) === undefined, 10_000, 'the old coordinator did not stop')
-  const boot = launchctl('bootstrap', domain(), plistPath())
+  // launchd goes on removing the old job after its process exits, and refuses a bootstrap meanwhile ("5: Input/output error").
+  await waitFor(async () => !launchctl('print', `${domain()}/${LABEL}`).ok, 15_000, 'launchd did not remove the old coordinator job')
+  let boot = launchctl('bootstrap', domain(), plistPath())
+  for (let tries = 1; !boot.ok && tries < 5; tries += 1) {
+    await new Promise(resolve => setTimeout(resolve, 1_000))
+    boot = launchctl('bootstrap', domain(), plistPath())
+  }
   if (!boot.ok) fail(`launchctl bootstrap failed: ${boot.output.trim()}`)
   await waitFor(async () => (await hello())?.version === VERSION, 15_000, `coordinator ${VERSION} did not start`)
   process.stdout.write(`installed: coordinator ${VERSION} runs at login (${plistPath()})\n`)
@@ -289,17 +295,24 @@ async function status(): Promise<void> {
   const state = body as SharedState
   const pct = (n: number | undefined) => (n === undefined ? '  ?' : `${Math.round(n)}%`.padStart(4))
   process.stdout.write(`coordinator ${running.version} (pid ${running.pid}${running.isManaged ? ', launchd' : ''}), ${state.sessions.length} sessions\n`)
-  process.stdout.write(`combined: 5-hour ${pct(state.combined.fiveHour?.pct)}, week ${pct(state.combined.sevenDay?.pct)}\n`)
+  // As of November 2026 no plan reports a 5-hour window: shown only where one does.
+  const hasFive = state.accounts.some(a => a.reading?.fiveHour !== undefined)
+  process.stdout.write(`combined: ${hasFive ? `5-hour ${pct(state.combined.fiveHour?.pct)}, ` : ''}week ${pct(state.combined.sevenDay?.pct)}\n`)
   for (const a of state.accounts) {
     const r = a.reading
     process.stdout.write(
-      `  ${a.id} ${(a.email ?? '(unknown)').padEnd(32)} 5h ${pct(r?.fiveHour?.pct)}  wk ${pct(r?.sevenDay?.pct)}  ${a.health.kind}` +
+      `  ${a.id} ${(a.email ?? '(unknown)').padEnd(32)} ${hasFive ? `5h ${pct(r?.fiveHour?.pct)}  ` : ''}wk ${pct(r?.sevenDay?.pct)}  ${a.health.kind}` +
         `${a.health.kind === 'login-needed' ? ` (${a.health.why})` : ''}, ${a.sessionCount} sessions${a.moveTo ? `, moves to ${a.moveTo}` : ''}\n`,
     )
   }
 }
 
 async function main(): Promise<void> {
+  // Piped into `head`, which closes early: stop quietly.
+  process.stdout.on('error', error => {
+    if ((error as NodeJS.ErrnoException).code === 'EPIPE') process.exit(0)
+    throw error
+  })
   checkNode()
   const [command, ...args] = process.argv.slice(2)
   switch (command) {
