@@ -1,0 +1,287 @@
+{
+  "version": 1842,
+  "coordinator": {
+    "version": "0.4.0",
+    "pid": 48213,
+    "startedAt": 1794124800000,
+    "isManaged": true
+  },
+  "now": 1794218400000,
+  "accounts": [
+    {
+      "id": "1",
+      "slot": "",
+      "email": "alex@example.com",
+      "orgId": "org-1",
+      "plan": "max",
+      "tier": "default_claude_max_20x",
+      "weight": 20,
+      "health": {
+        "kind": "ok",
+        "refreshExpiresAt": 1795946400000
+      },
+      "reading": {
+        "fiveHour": {
+          "pct": 62,
+          "resetsAt": "2026-11-09T11:20:00.000Z"
+        },
+        "sevenDay": {
+          "pct": 41,
+          "resetsAt": "2026-11-12T14:00:00.000Z"
+        },
+        "at": 1794218388000
+      },
+      "expiresAt": 1794240000000,
+      "isSpent": false,
+      "sessionCount": 12
+    },
+    {
+      "id": "2",
+      "slot": "/Users/alex/.claude/account-rotator/slots/2",
+      "email": "alex.studio@example.com",
+      "orgId": "org-2",
+      "orgName": "Example Studio",
+      "plan": "max",
+      "tier": "default_claude_max_20x",
+      "weight": 20,
+      "health": {
+        "kind": "ok",
+        "refreshExpiresAt": 1795773600000
+      },
+      "reading": {
+        "fiveHour": {
+          "pct": 93,
+          "resetsAt": "2026-11-09T12:05:00.000Z"
+        },
+        "sevenDay": {
+          "pct": 78,
+          "resetsAt": "2026-11-14T08:00:00.000Z"
+        },
+        "at": 1794218360000
+      },
+      "expiresAt": 1794229200000,
+      "isSpent": true,
+      "moveTo": "1",
+      "sessionCount": 0
+    },
+    {
+      "id": "3",
+      "slot": "/Users/alex/.claude/account-rotator/slots/3",
+      "email": "alex.max3@example.com",
+      "orgId": "org-3",
+      "plan": "max",
+      "tier": "default_claude_max_20x",
+      "weight": 20,
+      "health": {
+        "kind": "login-needed",
+        "why": "Claude rejected its sign-in: the refresh token has expired."
+      },
+      "reading": {
+        "fiveHour": {
+          "pct": 12,
+          "resetsAt": "2026-11-09T09:20:00.000Z"
+        },
+        "sevenDay": {
+          "pct": 55,
+          "resetsAt": "2026-11-11T19:00:00.000Z"
+        },
+        "at": 1794207600000
+      },
+      "isSpent": false,
+      "sessionCount": 0
+    }
+  ],
+  "combined": {
+    "fiveHour": {
+      "pct": 77.5,
+      "accounts": 2,
+      "nextResetAt": "2026-11-09T11:20:00.000Z"
+    },
+    "sevenDay": {
+      "pct": 59.5,
+      "accounts": 2,
+      "nextResetAt": "2026-11-12T14:00:00.000Z"
+    }
+  },
+  "settings": {
+    "rotateTo": "reset",
+    "footer": {
+      "session": "bars",
+      "week": "bars",
+      "sessionPercent": true,
+      "weekPercent": true,
+      "active": "lines",
+      "fill": "left"
+    }
+  },
+  "chrome": {
+    "accountId": "1",
+    "accountIds": [
+      "1",
+      "2"
+    ]
+  },
+  "sessions": [
+    {
+      "id": "sess-01",
+      "accountId": "1",
+      "pid": 41001,
+      "cwd": "/Users/alex/code/docspring",
+      "isInteractive": true,
+      "isBlocked": false,
+      "isPending": false,
+      "since": 1794200820000,
+      "lastSeen": 1794218396000
+    },
+    {
+      "id": "sess-02",
+      "accountId": "1",
+      "pid": 41002,
+      "cwd": "/Users/alex/code/docspring",
+      "isInteractive": true,
+      "isBlocked": false,
+      "isPending": false,
+      "since": 1794201240000,
+      "lastSeen": 1794218395000
+    },
+    {
+      "id": "sess-03",
+      "accountId": "1",
+      "pid": 41003,
+      "cwd": "/Users/alex/code/docspring",
+      "isInteractive": true,
+      "isBlocked": false,
+      "isPending": false,
+      "since": 1794201660000,
+      "lastSeen": 1794218394000
+    },
+    {
+      "id": "sess-04",
+      "accountId": "1",
+      "pid": 41004,
+      "cwd": "/Users/alex/code/docspring",
+      "isInteractive": true,
+      "isBlocked": false,
+      "isPending": false,
+      "since": 1794202080000,
+      "lastSeen": 1794218393000
+    },
+    {
+      "id": "sess-05",
+      "accountId": "1",
+      "pid": 41005,
+      "cwd": "/Users/alex/code/docspring",
+      "isInteractive": true,
+      "isBlocked": false,
+      "isPending": false,
+      "since": 1794202500000,
+      "lastSeen": 1794218392000
+    },
+    {
+      "id": "sess-06",
+      "accountId": "1",
+      "pid": 41006,
+      "cwd": "/Users/alex/code/docspring",
+      "isInteractive": true,
+      "isBlocked": false,
+      "isPending": false,
+      "since": 1794202920000,
+      "lastSeen": 1794218391000
+    },
+    {
+      "id": "sess-07",
+      "accountId": "1",
+      "pid": 41007,
+      "cwd": "/Users/alex/code/docspring",
+      "isInteractive": true,
+      "isBlocked": false,
+      "isPending": false,
+      "since": 1794203340000,
+      "lastSeen": 1794218390000
+    },
+    {
+      "id": "sess-08",
+      "accountId": "1",
+      "pid": 41008,
+      "cwd": "/Users/alex/code/claude-account-rotator",
+      "isInteractive": true,
+      "isBlocked": false,
+      "isPending": false,
+      "since": 1794203760000,
+      "lastSeen": 1794218389000
+    },
+    {
+      "id": "sess-09",
+      "accountId": "1",
+      "pid": 41009,
+      "cwd": "/Users/alex/code/claude-account-rotator",
+      "isInteractive": true,
+      "isBlocked": false,
+      "isPending": false,
+      "since": 1794204180000,
+      "lastSeen": 1794218388000
+    },
+    {
+      "id": "sess-10",
+      "accountId": "1",
+      "pid": 41010,
+      "cwd": "/Users/alex/code/claude-account-rotator",
+      "isInteractive": true,
+      "isBlocked": false,
+      "isPending": false,
+      "since": 1794204600000,
+      "lastSeen": 1794218387000
+    },
+    {
+      "id": "sess-11",
+      "accountId": "1",
+      "pid": 41011,
+      "cwd": "/Users/alex/code/infra",
+      "isInteractive": true,
+      "isBlocked": false,
+      "isPending": false,
+      "since": 1794205020000,
+      "lastSeen": 1794218386000
+    },
+    {
+      "id": "sess-12",
+      "accountId": "1",
+      "pid": 41012,
+      "isInteractive": true,
+      "isBlocked": false,
+      "isPending": false,
+      "since": 1794205440000,
+      "lastSeen": 1794218385000
+    }
+  ],
+  "notices": [
+    {
+      "id": 41,
+      "at": 1794211200000,
+      "text": "Claude in Chrome now uses account 1.",
+      "notify": false,
+      "accountId": "1"
+    },
+    {
+      "id": 42,
+      "at": 1794215280000,
+      "text": "Account 3 needs signing in again: Claude rejected its sign-in.",
+      "notify": true,
+      "accountId": "3"
+    },
+    {
+      "id": 43,
+      "at": 1794217320000,
+      "text": "Account 2 is past 90% of its 5-hour window: 9 sessions moved to account 1.",
+      "notify": true,
+      "accountId": "2"
+    },
+    {
+      "id": 44,
+      "at": 1794218160000,
+      "text": "Account 2 is spent until 12:05. New sessions start on account 1.",
+      "notify": false,
+      "accountId": "2"
+    }
+  ]
+}

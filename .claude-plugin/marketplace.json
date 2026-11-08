@@ -1,7 +1,7 @@
 {
   "name": "claude-account-rotator",
   "owner": {
-    "name": "Ivo Kund"
+    "name": "Nathan Broadbent"
   },
   "metadata": {
     "description": "Rotates Claude Code between your Claude accounts as their usage limits fill."

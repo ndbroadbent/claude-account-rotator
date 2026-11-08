@@ -2,6 +2,18 @@
 
 What each version of the account rotator changed. To get each one as Claude Code starts, turn on auto-update: in `/plugin`, open **Marketplaces**, pick **claude-account-rotator** and choose **Enable auto-update**. To update by hand, run `claude plugin marketplace update claude-account-rotator`, then `claude plugin update account-rotator@claude-account-rotator`, and start a new session.
 
+## 0.4.0 - 2026-11-09
+
+The first version of this fork ([ivokund/claude-account-rotator](https://github.com/ivokund/claude-account-rotator) is the original).
+
+- **One coordinator for every session.** Each session used to read every account's sign-in from the keychain and poll every account's usage on its own, so 30 sessions made 30 times the calls. A coordinator process now does that once per account for all of them. Sessions reach it over a Unix socket and get its changes as they happen. Sessions also report the usage their responses carry, so a busy account seldom needs polling at all. It also runs sign-ins one at a time, keeps the settings, and knows which sessions are on which account. Sessions on a spent account go where it says. A notice (an account needing a sign-in) shows in every session, and one of them posts the desktop notification.
+- **The coordinator starts itself.** The first session to need it starts it, and it exits once no session has used it for 30 minutes. `node coordinator/cli.ts install` runs it at login instead (macOS), which the menu bar app needs. A session running a newer version replaces an older coordinator.
+- **A menu bar app** (`menubar/`, macOS) shows your combined usage across every account, weighted by plan size, so a Max 20x account counts four times a Max 5x one. Click it for each account's usage, sign-ins, the rotation setting, sessions by folder and recent notices.
+- **The panel says how many sessions use each account**, and the line above the prompt says when the coordinator can't be reached, with **Retry**.
+- **Removing an account in use** moves its sessions off it first, then signs it out.
+- **Weekly limits only.** As of November 2026 Claude has no 5-hour limit. The footer, panel and menu bar show the week alone, the rotation moves on at 2% of the week left (was 5%), and **soonest reset** picks the account whose week resets first. A turn that hits the limit counts the week full. If a plan reports a 5-hour window again, it comes back everywhere.
+- Needs Node.js 22.18 or later on `PATH`, for the coordinator.
+
 ## 0.3.0 - 2026-10-16
 
 - **Other accounts** at the top of the panel's **Chrome** box lists the accounts no Chrome extension is known to answer as, each with **Try to connect**: for a Chrome opened on another account after the window started. The accounts that answer have **Use for Chrome**.

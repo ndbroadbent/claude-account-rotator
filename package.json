@@ -1,0 +1,15 @@
+{
+  "name": "claude-account-rotator",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.18" },
+  "scripts": {
+    "test": "node --test coordinator/*.spec.ts && claude plugin test .",
+    "test:coordinator": "node --test coordinator/*.spec.ts",
+    "typecheck": "tsc -p coordinator/tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "typescript": "5.9.3"
+  }
+}

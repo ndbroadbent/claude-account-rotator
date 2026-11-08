@@ -2,6 +2,7 @@ import type { Elements, RenderChildren, RenderSurface } from 'claude-code'
 
 import type { Account, Fill, FooterRun, FooterStyle, Glyphs, Highlight, RotateTo, UsageWindow, View } from '../types'
 import {
+  hasFiveHour,
   GLYPHS,
   LEAVE_FIVE_HOUR,
   LEAVE_SEVEN_DAY,
@@ -41,6 +42,7 @@ export type Actions = {
   toggleChromeOthers: () => void
   connectChrome: () => void
   setDemo: (on: boolean) => void
+  retryCoordinator: () => void
 }
 
 const needsSignIn = (view: View) => view.accounts.filter(a => view.health[a.id]?.kind === 'login-needed')
@@ -50,7 +52,10 @@ const DEMO: readonly (readonly [number, number])[] = [[85, 70], [60, 40], [35, 9
 
 /** A login's room left right now and in its week, or the demo's; undefined where it has none. */
 function rooms(view: View, a: Account, i: number, now: number): readonly [number | undefined, number | undefined] {
-  if (view.demo) return DEMO[i % DEMO.length] ?? [undefined, undefined]
+  if (view.demo) {
+    const [now5, week] = DEMO[i % DEMO.length] ?? [undefined, undefined]
+    return [hasFiveHour(view.readings) ? now5 : undefined, week]
+  }
   const r = view.readings[a.id]
   return [availableNow(r, now), roomLeft(r?.sevenDay, now)]
 }
@@ -60,14 +65,14 @@ const roomRun = (leftPct: number) => ({ color: roomColor(leftPct), lit: roomColo
 
 /**
  * A login's glyph in a footer row, green with all of its room left to red with
- * none. The session row says when a login needs a sign-in; a login without the
+ * none. The top row shown says when a login needs a sign-in; a login without the
  * room (a plan with no weekly limit) leaves its place blank.
  */
-function glyphOf(view: View, a: Account, style: Glyphs, row: 0 | 1, room: number | undefined): FooterRun {
+function glyphOf(view: View, a: Account, style: Glyphs, isTop: boolean, room: number | undefined): FooterRun {
   const health = view.health[a.id]?.kind
-  if (health === 'login-needed') return row === 0 ? { text: '⚠', color: 'error' } : { text: ' ' }
-  if (health === 'logging-in') return row === 0 ? { text: '◌', color: 'warning' } : { text: ' ' }
-  if (room === undefined) return { text: row === 0 ? '·' : ' ' }
+  if (health === 'login-needed') return isTop ? { text: '⚠', color: 'error' } : { text: ' ' }
+  if (health === 'logging-in') return isTop ? { text: '◌', color: 'warning' } : { text: ' ' }
+  if (room === undefined) return { text: isTop ? '·' : ' ' }
   return { text: glyph(style, shown(view.footer.fill, room)), ...roomRun(room) }
 }
 
@@ -122,7 +127,7 @@ function edge(view: View, i: number, inGaps: boolean): FooterRun[] {
  * row with its own off keeps their columns blank, so its percent lines up
  * under the other's.
  */
-function footerRow(view: View, now: number, row: 0 | 1, style: Glyphs, showPercent: boolean, hasColumns: boolean): FooterRun[] {
+function footerRow(view: View, now: number, row: 0 | 1, style: Glyphs, showPercent: boolean, hasColumns: boolean, isTop: boolean): FooterRun[] {
   const pct = activeRoom(view, now, row)
   const inGaps = hasColumns && IN_GAPS.includes(view.footer.active)
   const columns = hasColumns
@@ -130,7 +135,7 @@ function footerRow(view: View, now: number, row: 0 | 1, style: Glyphs, showPerce
         ...view.accounts.flatMap((a, i) => [
           ...edge(view, i, inGaps),
           {
-            ...(style === 'none' ? { text: ' ' } : glyphOf(view, a, style, row, rooms(view, a, i, now)[row])),
+            ...(style === 'none' ? { text: ' ' } : glyphOf(view, a, style, isTop, rooms(view, a, i, now)[row])),
             ...marked(view.footer.active, a.id === view.activeId),
           },
         ]),
@@ -191,13 +196,18 @@ export function Footer(ui: Ui, view: View, modes: readonly string[], now: number
   const { Box, Text, Button } = ui
   const { session, week, sessionPercent, weekPercent } = view.footer
   const hasWeek = view.accounts.some((a, i) => rooms(view, a, i, now)[1] !== undefined)
-  const sessionGlyphs = session !== 'none'
+  // As of November 2026 no plan reports a 5-hour window, so the footer shows only the week.
+  const hasSession = view.accounts.some((a, i) => rooms(view, a, i, now)[0] !== undefined)
+  const sessionGlyphs = session !== 'none' && hasSession
   const weekGlyphs = week !== 'none' && hasWeek
   const hasColumns = sessionGlyphs || weekGlyphs
   const weekShown = weekGlyphs || (weekPercent && activeRoom(view, now, 1) !== undefined)
-  const shownRows = [...(sessionGlyphs || sessionPercent ? [0 as const] : []), ...(weekShown ? [1 as const] : [])]
-  const rows = shownRows.map(row =>
-    row === 0 ? footerRow(view, now, 0, session, sessionPercent, hasColumns) : footerRow(view, now, 1, week, weekPercent, hasColumns),
+  const sessionShown = sessionGlyphs || (sessionPercent && activeRoom(view, now, 0) !== undefined)
+  const shownRows = [...(sessionShown ? [0 as const] : []), ...(weekShown ? [1 as const] : [])]
+  const rows = shownRows.map((row, k) =>
+    row === 0
+      ? footerRow(view, now, 0, session, sessionPercent, hasColumns, k === 0)
+      : footerRow(view, now, 1, week, weekPercent, hasColumns, k === 0),
   )
   return (
     <Box flexDirection="row" columnGap={1}>
@@ -315,15 +325,17 @@ function section(ui: Ui, key: string, title: string, children: RenderChildren) {
 /** The footer's settings: a style and a percent per row, what glyphs fill with, how the login in use stands out, and a demo preview. */
 function FooterSettings(ui: Ui, view: View, act: Actions) {
   const { Box, Text } = ui
+  // The session row's settings only while a login reports a 5-hour window.
+  const hasSession = hasFiveHour(view.readings)
   return section(ui, 'display', 'Display', [
-    choice(ui, 'footer-session', 'Session', GLYPH_CHOICES, view.footer.session, session => act.setFooter({ session })),
+    hasSession && choice(ui, 'footer-session', 'Session', GLYPH_CHOICES, view.footer.session, session => act.setFooter({ session })),
     choice(ui, 'footer-week', 'Week', GLYPH_CHOICES, view.footer.week, week => act.setFooter({ week })),
     <Box key="footer-percent" flexDirection="row">
       <Box width={NAME_WIDTH} flexShrink={0}>
         <Text dimColor>Percent</Text>
       </Box>
       <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
-        {toggle(ui, 'footer-percent-session', 'session', view.footer.sessionPercent, on => act.setFooter({ sessionPercent: on }))}
+        {hasSession && toggle(ui, 'footer-percent-session', 'session', view.footer.sessionPercent, on => act.setFooter({ sessionPercent: on }))}
         {toggle(ui, 'footer-percent-week', 'week', view.footer.weekPercent, on => act.setFooter({ weekPercent: on }))}
       </Box>
     </Box>,
@@ -469,9 +481,24 @@ function ChromeBand(ui: Ui, view: View, act: Actions) {
   )
 }
 
+/** The line saying the coordinator can't be reached: what this session knows may be stale, and nothing it shares reaches the others. */
+function CoordinatorLine(ui: Ui, view: View, act: Actions) {
+  const { Box, Text, Button } = ui
+  const error = view.coordinator?.error
+  if (error === undefined) return undefined
+  return (
+    <Box key="coordinator" flexDirection="row" columnGap={2}>
+      <Text color="error">⚠ Can't reach the account coordinator: {error}</Text>
+      <Button key="coordinator-retry" onPress={act.retryCoordinator}>Retry</Button>
+    </Box>
+  )
+}
+
 /** The band above the prompt, drawn only while a login needs the person. */
 export function Band(ui: Ui, view: View, now: number, act: Actions) {
   const { Box, Text, Button } = ui
+  const unreachable = CoordinatorLine(ui, view, act)
+  if (unreachable !== undefined) return unreachable
   const signingIn = view.accounts.find(a => view.health[a.id]?.kind === 'logging-in')
   if (signingIn !== undefined) {
     return (
@@ -560,6 +587,12 @@ const USE_WIDTH = '[ Use now ]'.length
 function lineEnd(ui: Ui, view: View, a: Account, act: Actions) {
   const { Box, Text, Button } = ui
   const health = view.health[a.id]
+  const use = (end: RenderChildren) => (
+    <Box minWidth={USE_WIDTH} justifyContent="flex-end">
+      {end}
+    </Box>
+  )
+  if (view.retiring?.includes(a.id)) return [use(<Text dimColor>◌ removing…</Text>)]
   const remove =
     a.slot !== '' &&
     health?.kind !== 'logging-in' &&
@@ -568,11 +601,6 @@ function lineEnd(ui: Ui, view: View, a: Account, act: Actions) {
     ) : (
       <Button key={`ask-remove-${a.id}`} dimColor onPress={() => act.askRemove(a.id)}>Remove</Button>
     ))
-  const use = (end: RenderChildren) => (
-    <Box minWidth={USE_WIDTH} justifyContent="flex-end">
-      {end}
-    </Box>
-  )
   switch (health?.kind) {
     case 'login-needed':
       return [
@@ -611,10 +639,12 @@ function accountRows(ui: Ui, view: View, a: Account, now: number, act: Actions) 
   const r = view.readings[a.id]
   const isActive = a.id === view.activeId
   const expiry = health?.kind === 'ok' ? health.refreshExpiresAt : undefined
-  // Its organization and plan, and whether the Chrome extension is signed in to it.
+  // Its organization and plan, whether the Chrome extension is signed in to it, and how many sessions use it.
+  const sessions = view.sessionCounts?.[a.id] ?? 0
   const about = [
     ...(a.orgName === undefined ? [] : [a.plan ? `${a.orgName} · ${a.plan}` : a.orgName]),
     ...(view.chromeAccountId === a.id ? ['Chrome'] : []),
+    ...(sessions > 0 ? [`${sessions} session${sessions === 1 ? '' : 's'}`] : []),
   ]
   return (
     <Box key={`account-${a.id}`} flexDirection="column" marginBottom={1}>
@@ -632,7 +662,7 @@ function accountRows(ui: Ui, view: View, a: Account, now: number, act: Actions) 
           {lineEnd(ui, view, a, act)}
         </Box>
       </Box>
-      {windowRow(ui, view.footer.fill, isActive, '5h', r !== undefined, r?.fiveHour, now)}
+      {hasFiveHour(view.readings) && windowRow(ui, view.footer.fill, isActive, '5h', r !== undefined, r?.fiveHour, now)}
       {windowRow(ui, view.footer.fill, isActive, 'week', r !== undefined, r?.sevenDay, now)}
       {expiry !== undefined && expiry - now < SIGN_IN_WARN_MS && (
         <Text color="warning">   sign-in runs out {untilText(expiry, now)}; signing in again renews it</Text>
@@ -643,18 +673,21 @@ function accountRows(ui: Ui, view: View, a: Account, now: number, act: Actions) 
 
 /** Where the rotation moves to, as its setting picks. */
 const RULE_TARGETS: Record<Exclude<RotateTo, 'off'>, string> = {
-  reset: 'the account whose 5-hour window resets soonest',
+  reset: 'the account whose usage resets soonest',
   room: 'the account with the most room right now',
   order: 'the next account in the list with room',
 }
 
 /** When the rotation moves on, counted the way the footer shows it (room left, or what is used), and where to. */
-function rule(fill: Fill, rotateTo: RotateTo): string {
+function rule(fill: Fill, rotateTo: RotateTo, hasFive: boolean): string {
   if (rotateTo === 'off') return 'Rotation is disabled: the session stays on the account in use until you pick another.'
-  const when =
-    fill === 'left'
+  const when = hasFive
+    ? fill === 'left'
       ? `Once the account in use has ${100 - LEAVE_FIVE_HOUR}% of its 5-hour window or ${100 - LEAVE_SEVEN_DAY}% of its week left`
       : `Once the account in use has used ${LEAVE_FIVE_HOUR}% of its 5-hour window or ${LEAVE_SEVEN_DAY}% of its week`
+    : fill === 'left'
+      ? `Once the account in use has ${100 - LEAVE_SEVEN_DAY}% of its week left`
+      : `Once the account in use has used ${LEAVE_SEVEN_DAY}% of its week`
   return `${when}, moves to ${RULE_TARGETS[rotateTo]}.`
 }
 
@@ -708,7 +741,8 @@ export function Pane(ui: Ui, view: View, now: number, act: Actions) {
   ]
   return (
     <Box flexDirection="column" rowGap={1}>
-      {view.isSwitchBlocked ? <Text color="warning">{blockedRule(view)}</Text> : <Text dimColor>{rule(view.footer.fill, view.rotateTo)}</Text>}
+      {CoordinatorLine(ui, view, act)}
+      {view.isSwitchBlocked ? <Text color="warning">{blockedRule(view)}</Text> : <Text dimColor>{rule(view.footer.fill, view.rotateTo, hasFiveHour(view.readings))}</Text>}
       {LoginLine(ui, view)}
       {section(ui, 'accounts', 'Accounts', accounts)}
       {(view.hasChrome === true || view.chromeAccountId !== undefined || (view.chromeAccountIds?.length ?? 0) > 0) && ChromeSettings(ui, view, act)}

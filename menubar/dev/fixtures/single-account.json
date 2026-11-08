@@ -1,0 +1,110 @@
+{
+  "version": 17,
+  "coordinator": {
+    "version": "0.4.0",
+    "pid": 50122,
+    "startedAt": 1794211200000,
+    "isManaged": true
+  },
+  "now": 1794218400000,
+  "accounts": [
+    {
+      "id": "1",
+      "slot": "",
+      "email": "sam@example.org",
+      "orgId": "org-9",
+      "plan": "max",
+      "tier": "default_claude_max_5x",
+      "weight": 5,
+      "health": {
+        "kind": "ok"
+      },
+      "reading": {
+        "fiveHour": {
+          "pct": 38,
+          "resetsAt": "2026-11-09T12:41:00.000Z"
+        },
+        "sevenDay": {
+          "pct": 61,
+          "resetsAt": "2026-11-14T13:00:00.000Z"
+        },
+        "at": 1794218375000
+      },
+      "isSpent": false,
+      "sessionCount": 3
+    }
+  ],
+  "combined": {
+    "fiveHour": {
+      "pct": 38,
+      "accounts": 1,
+      "nextResetAt": "2026-11-09T12:41:00.000Z"
+    },
+    "sevenDay": {
+      "pct": 61,
+      "accounts": 1,
+      "nextResetAt": "2026-11-14T13:00:00.000Z"
+    }
+  },
+  "settings": {
+    "rotateTo": "reset",
+    "footer": {
+      "session": "bars",
+      "week": "bars",
+      "sessionPercent": true,
+      "weekPercent": true,
+      "active": "lines",
+      "fill": "left"
+    }
+  },
+  "chrome": {
+    "accountId": "1",
+    "accountIds": [
+      "1"
+    ]
+  },
+  "sessions": [
+    {
+      "id": "sess-01",
+      "accountId": "1",
+      "pid": 41001,
+      "cwd": "/Users/sam/src/website",
+      "isInteractive": true,
+      "isBlocked": false,
+      "isPending": false,
+      "since": 1794200820000,
+      "lastSeen": 1794218396000
+    },
+    {
+      "id": "sess-02",
+      "accountId": "1",
+      "pid": 41002,
+      "cwd": "/Users/sam/src/website",
+      "isInteractive": true,
+      "isBlocked": false,
+      "isPending": false,
+      "since": 1794201240000,
+      "lastSeen": 1794218395000
+    },
+    {
+      "id": "sess-03",
+      "accountId": "1",
+      "pid": 41003,
+      "cwd": "/Users/sam/notes",
+      "isInteractive": true,
+      "isBlocked": false,
+      "isPending": false,
+      "since": 1794201660000,
+      "lastSeen": 1794218394000
+    }
+  ],
+  "notices": [
+    {
+      "id": 3,
+      "at": 1794216300000,
+      "text": "Signed in as sam@example.org (Max 5x).",
+      "notify": false,
+      "accountId": "1"
+    }
+  ]
+}

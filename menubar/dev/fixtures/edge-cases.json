@@ -1,0 +1,181 @@
+{
+  "version": 7,
+  "coordinator": {
+    "version": "0.5.0-dev",
+    "pid": 777,
+    "startedAt": 1794217800000,
+    "isManaged": false,
+    "futureField": true
+  },
+  "now": 1794218400000,
+  "futureTopLevel": {
+    "anything": [
+      1,
+      2,
+      3
+    ]
+  },
+  "accounts": [
+    {
+      "id": "1",
+      "slot": "",
+      "email": "alexandra.konstantinopoulou+claude-code@example-consulting.co.uk",
+      "plan": "pro",
+      "tier": "default_claude_pro",
+      "weight": 1,
+      "health": {
+        "kind": "logging-in",
+        "since": 1794218380000
+      },
+      "reading": {
+        "fiveHour": {
+          "pct": 100,
+          "resetsAt": "2026-11-09T10:25:00.000Z"
+        },
+        "sevenDay": {
+          "pct": 97,
+          "resetsAt": "2026-11-16T09:00:00.000Z"
+        },
+        "at": 1794217860000
+      },
+      "isSpent": true,
+      "sessionCount": 1,
+      "somethingNew": "ignored"
+    },
+    {
+      "id": "2",
+      "slot": "/tmp/slots/2",
+      "email": "alex@example-consulting.co.uk",
+      "orgId": "org-t",
+      "orgName": "Example Consulting Ltd",
+      "plan": "team",
+      "tier": "default_claude_team",
+      "weight": 1,
+      "health": {
+        "kind": "ok"
+      },
+      "reading": {
+        "fiveHour": {
+          "pct": 45,
+          "resetsAt": "2026-11-09T14:59:00.000Z"
+        },
+        "at": 1794218330000
+      },
+      "isSpent": false,
+      "isRetiring": true,
+      "moveTo": "3",
+      "sessionCount": 2
+    },
+    {
+      "id": "3",
+      "slot": "/tmp/slots/3",
+      "email": "alex.five@example.com",
+      "tier": "default_claude_max_5x",
+      "weight": 5,
+      "health": {
+        "kind": "ok"
+      },
+      "isSpent": false,
+      "sessionCount": 0
+    },
+    {
+      "id": "12",
+      "slot": "/tmp/slots/12",
+      "plan": "enterprise",
+      "weight": 1,
+      "health": {
+        "kind": "quarantined",
+        "reason": "a kind this app does not know"
+      },
+      "reading": {
+        "fiveHour": {
+          "pct": 30,
+          "resetsAt": "2026-11-09T09:55:00.000Z"
+        },
+        "sevenDay": {
+          "pct": 3,
+          "resetsAt": "2026-11-15T10:00:00.000Z"
+        },
+        "at": 1794211200000
+      },
+      "isSpent": false,
+      "sessionCount": 0
+    },
+    {
+      "slot": "/tmp/slots/broken",
+      "email": "no-id@example.com"
+    }
+  ],
+  "combined": {
+    "fiveHour": {
+      "pct": 52,
+      "accounts": 4,
+      "nextResetAt": "2026-11-09T09:55:00.000Z"
+    },
+    "sevenDay": {
+      "pct": 50,
+      "accounts": 3,
+      "nextResetAt": "2026-11-15T10:00:00.000Z"
+    }
+  },
+  "settings": {
+    "rotateTo": "off",
+    "footer": {
+      "session": "bars",
+      "week": "bars",
+      "sessionPercent": true,
+      "weekPercent": true,
+      "active": "lines",
+      "fill": "left"
+    }
+  },
+  "chrome": {
+    "accountIds": [],
+    "miss": "No browser answered."
+  },
+  "sessions": [
+    {
+      "id": "sess-01",
+      "accountId": "1",
+      "pid": 41001,
+      "cwd": "/Users/alex/work/a-very-long-folder-name-for-a-client-project-2026",
+      "isInteractive": true,
+      "isBlocked": false,
+      "isPending": false,
+      "since": 1794200820000,
+      "lastSeen": 1794218396000
+    },
+    {
+      "id": "sess-02",
+      "accountId": "2",
+      "pid": 41002,
+      "cwd": "/Users/alex/work/api/",
+      "isInteractive": true,
+      "isBlocked": false,
+      "isPending": false,
+      "since": 1794201240000,
+      "lastSeen": 1794218395000
+    },
+    {
+      "id": "sess-03",
+      "accountId": "2",
+      "pid": 41003,
+      "cwd": "/Users/alex/work/api",
+      "isInteractive": true,
+      "isBlocked": true,
+      "isPending": false,
+      "since": 1794201660000,
+      "lastSeen": 1794218394000
+    }
+  ],
+  "notices": [
+    {
+      "id": "not-a-number",
+      "text": "A notice this app cannot read is skipped."
+    }
+  ],
+  "signIn": {
+    "accountId": "1",
+    "since": 1794218380000
+  }
+}

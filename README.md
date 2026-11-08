@@ -2,6 +2,8 @@
 
 A [Claude Code](https://code.claude.com) mod for people with more than one Claude account. It shows each account's usage under the prompt, and moves your session to another account before the one in use runs out.
 
+This is a fork of [ivokund/claude-account-rotator](https://github.com/ivokund/claude-account-rotator) for people who run many sessions at once. One coordinator process reads every account's sign-in and polls its usage for all sessions, rather than each session doing it alone. A menu bar app shows the combined usage across your accounts. See [Many sessions](#many-sessions-the-coordinator) and [The menu bar app](#the-menu-bar-app).
+
 ![The footer up close as the account in use runs low; the session moves to another account and a notice says so; then the panel switches the footer's top row between bars, pies and braille](demo/demo.gif)
 
 <sub>A real session fed imitated accounts (`demo/harness`), so no real account appears.</sub>
@@ -9,7 +11,7 @@ A [Claude Code](https://code.claude.com) mod for people with more than one Claud
 ## Install
 
 ```
-/plugin install account-rotator --marketplace ivokund/claude-account-rotator
+/plugin install account-rotator --marketplace ndbroadbent/claude-account-rotator
 ```
 
 **Turn on auto-update**, or you stay on the version you installed: in `/plugin`, open **Marketplaces**, pick **claude-account-rotator** and choose **Enable auto-update**. Claude Code then updates the mod each time it starts. It is off by default for every marketplace but Anthropic's own.
@@ -27,7 +29,7 @@ The [changelog](CHANGELOG.md) says what each version changed.
 
 ## The footer
 
-A column per account. The top row is the room it has right now (its 5-hour window, or none once its week is spent), the bottom row its week: green with plenty left, red with little. The percents are the account in use's.
+A column per account showing the room left in its week: green with plenty left, red with little. The percent is the account in use's. As of November 2026 Claude has no 5-hour limit. If a plan reports a 5-hour window again, the footer adds a row above for the room each account has right now.
 
 Click it for the panel: each account's usage and reset times, **Sign in**, **Use now** and **Remove**, **+ Add an account**, **Rotate now**, **Chrome**, which picks the account Claude in Chrome uses, **Usage based rotation**, which picks the account the rotation moves to, and **Display**, which picks the footer's look:
 
@@ -35,7 +37,7 @@ Click it for the panel: each account's usage and reset times, **Sign in**, **Use
 
 ## What it does
 
-- **Rotates.** Once the account in use is down to 10% of its 5-hour window or 5% of its week, the session moves to another account, and a notice says which and why. **Usage based rotation** in the panel picks which: by default the one whose 5-hour window resets soonest, so room about to refill is used before it does; else the one with the most room, or the next in the list; or **disabled**, which leaves switching to you.
+- **Rotates.** Once the account in use is down to 2% of its week (or 10% of a 5-hour window, where a plan still reports one), the session moves to another account, and a notice says which and why. **Usage based rotation** in the panel picks which: by default the one whose usage resets soonest, so room about to refill is used before it does; else the one with the most room, or the next in the list; or **disabled**, which leaves switching to you.
 - **Recovers.** A turn that still hits a usage limit or a rejected sign-in switches accounts and asks Claude to carry on.
 - **Shows what is really in use.** If a switch doesn't take, the footer and panel go back to the old account, and the rotation stops trying the other one for that session.
 - **Follows `/login`.** `/login` signs in the account the session is on, which after a switch isn't Claude Code's login. The mod checks who each account's sign-in belongs to: one that now holds another account's asks for its own again, and the session moves off it; one signed in as an account not on the list becomes that account.
@@ -43,8 +45,40 @@ Click it for the panel: each account's usage and reset times, **Sign in**, **Use
 - **Keeps Claude in Chrome working.** Your Chrome extension answers only the account it is signed in to: press **Try to connect** next to it in the panel's **Chrome** box. Each window connects Claude in Chrome as that account when it opens, and the connection stays as the rotation moves the window. When a browser call still finds no browser, the mod reconnects it and tells Claude to carry on. See [Claude in Chrome](#claude-in-chrome).
 - **Warns.** When every account is near its limit, a line above the prompt says when the next one frees up. When an account needs signing in again, the same line says so and signs it in with one click.
 
+## Many sessions: the coordinator
+
+Every session talks to one coordinator process over a Unix socket, `~/.claude/account-rotator/coordinator.sock`. The coordinator:
+
+- reads each account's sign-in and polls its usage once for all sessions: an account's usage at most every 5 minutes, and less while sessions on it report the usage their responses carry;
+- tells every session about each change as it happens (a long poll), so the footers stay in step;
+- says where sessions on a spent account go, runs browser sign-ins one at a time, and keeps the settings and the Chrome account;
+- knows which sessions are on which account: the panel shows the count beside each account;
+- shows a notice, such as an account needing a sign-in, in every session, and has one session post the desktop notification.
+
+What only a session can do stays in the session: pointing its own requests at an account, reading its responses' usage, and Claude in Chrome.
+
+The first session that needs the coordinator starts it in the background, and it exits once no session has used it for 30 minutes. To keep it running from login (the menu bar app needs this), install it as a LaunchAgent on macOS:
+
+```
+node ~/.claude/plugins/marketplaces/claude-account-rotator/coordinator/cli.ts install
+```
+
+That copies the coordinator to `~/.claude/account-rotator/app`, so a plugin update doesn't move it. A session with a newer version of the mod replaces an older coordinator by itself. Other commands: `status` (each account's usage and sessions), `start`, `stop`, `upgrade` and `uninstall`. Its state and log are in `~/.claude/account-rotator`; the API is in [docs/coordinator-api.md](docs/coordinator-api.md).
+
+## The menu bar app
+
+`menubar/` holds a small macOS menu bar app that reads the coordinator. The menu bar shows your combined weekly usage across every account, with ⚠ while an account needs a sign-in (and the 5-hour window first, if a plan reports one again). Each account counts by the size of its plan, so a Max 20x account counts four times a Max 5x one. Click it for each account's usage and reset times, **Sign in**, the rotation setting, the sessions by folder and the recent notices. A gear menu switches between used and left.
+
+```
+menubar/install.sh      # builds it, copies it to ~/Applications and starts it at login
+menubar/uninstall.sh
+```
+
+It needs the Xcode command line tools (Swift 6) and the coordinator installed as above.
+
 ## Requirements
 
+- Node.js 22.18 or later on `PATH`, for the coordinator.
 - macOS, where Claude Code keeps sign-ins in the keychain, or Linux, where it keeps them in files.
 - Claude Code 2.1.299 or later, in its fullscreen renderer (`/tui fullscreen`), the only one that passes clicks on: the panel opens with a click.
 - Any Mac terminal: Terminal.app, iTerm2, Ghostty, Warp, VS Code; on Linux, one with mouse reporting. In iTerm2 the profile's *Enable mouse reporting* must be on, in tmux `set -g mouse on`, and iTerm2's `tmux -CC` mode can't run fullscreen.
@@ -126,11 +160,11 @@ A window Claude Code stops from switching can connect only as the account it is 
 ## How it works
 
 - Each account you add gets a folder, `~/.claude/accounts/<n>`, and Claude Code keeps its sign-in in the keychain under that folder's name (on Linux, in that folder's `.credentials.json`), as for any config folder. A switch points the session at another account's sign-in.
-- Its only network traffic: each account's usage every 10 minutes, from the endpoint `/usage` reads, and once per sign-in who it belongs to, from the one Claude Code asks at a sign-in, each with that account's own token. In a session with Claude in Chrome it also asks Claude Code's own Claude in Chrome which browsers answer, as the session opens, before moving off the extension's account, and on **Use for Chrome**, **Try to connect** and **Connect**. Tokens stay where Claude Code keeps them; the mod stores each account's email, organization, plan and last usage, a digest of its token, to tell a new sign-in, and which account your Chrome extension is signed in to.
+- One coordinator process reads the sign-ins and makes the network calls for every session: each account's usage at most every 5 minutes, from the endpoint `/usage` reads, and once per sign-in who it belongs to, from the one Claude Code asks at a sign-in, each with that account's own token. In a session with Claude in Chrome it also asks Claude Code's own Claude in Chrome which browsers answer, as the session opens, before moving off the extension's account, and on **Use for Chrome**, **Try to connect** and **Connect**. Tokens stay where Claude Code keeps them; the coordinator stores (in `~/.claude/account-rotator/state.json`) each account's email, organization, plan and last usage, a digest of its token (never the token), to tell a new sign-in, and which account your Chrome extension is signed in to. The file is readable only by you.
 
 ## Uninstall
 
-Remove each account in the panel, which signs it out. Then run `claude plugin marketplace remove claude-account-rotator`, which uninstalls the mod and deletes what it stored, and delete `~/.claude/accounts`.
+Remove each account in the panel, which signs it out. Run `menubar/uninstall.sh` if you installed the menu bar app, and `node ~/.claude/account-rotator/app/coordinator/cli.ts uninstall` if you installed the coordinator. Then run `claude plugin marketplace remove claude-account-rotator`, which uninstalls the mod, and delete `~/.claude/accounts` and `~/.claude/account-rotator`.
 
 ## Terms
 
@@ -138,7 +172,7 @@ As of October 2026:
 
 - Neither Anthropic's [Consumer Terms](https://www.anthropic.com/legal/consumer-terms) (October 8, 2025) nor its [Commercial Terms](https://www.anthropic.com/legal/commercial-terms) (June 17, 2025) forbid one person from holding more than one Claude account. The Consumer Terms forbid sharing an account's login details, so add only your own. A Team or Enterprise seat is also under its organization's rules.
 - Claude Code's [legal page](https://code.claude.com/docs/en/legal-and-compliance) says the advertised usage limits of Pro and Max assume ordinary, individual usage. It also says Anthropic may enforce its rules on sign-ins and credentials without notice. The mod signs accounts in only through Claude Code's own `claude auth login` and keeps no tokens of its own.
-- The Consumer Terms forbid reaching the Services "through automated or non-human means" except with an API key. The mod's usage check every 10 minutes and its "carry on" prompt after a switch run inside Claude Code, as part of your own session, but judge that for yourself.
+- The Consumer Terms forbid reaching the Services "through automated or non-human means" except with an API key. The coordinator's usage check (each account at most every 5 minutes) and the mod's "carry on" prompt after a switch run inside Claude Code, as part of your own session, but judge that for yourself.
 - The [Usage Policy](https://www.anthropic.com/legal/aup) forbids intentionally bypassing restrictions or guardrails built into Anthropic's products: read the warning in [Turn the security default off](#3-turn-the-security-default-off) first.
 
 Terms change; this is not legal advice. Not affiliated with or endorsed by Anthropic.
@@ -148,8 +182,13 @@ Terms change; this is not legal advice. Not affiliated with or endorsed by Anthr
 ```
 claude --plugin-dir .     # a session with the mod loaded from this folder
 claude plugin validate .
-claude plugin test .
+pnpm install
+pnpm test                 # the coordinator's tests (node --test), then the mod's (claude plugin test)
+pnpm typecheck
+(cd menubar && swift test)
 ```
+
+The mod's tests run the real coordinator in memory, over the same imitated keychain and usage endpoint.
 
 `--plugin-dir` loads this folder over the installed release for that session only, with a list of accounts of its own, so a broken working tree breaks only that window. Keep the marketplace installed from GitHub: added from this folder instead, every window loads the folder as it stands. `/release` publishes a version, by the steps in `.claude/skills/release`.
 

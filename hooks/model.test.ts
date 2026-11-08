@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { RotateTo, View } from '../types'
-import { DEFAULT_FOOTER, availableNow, braille, browsersFrom, chromeNote, credentialFrom, credentialsFile, footerStyleFrom, healthOf, identityFromProfile, isNoBrowser, isPolicyRefusal, keychainItem, pickTarget, pie, readingFromUsage, rotateToFrom, shouldLeave, roomColor, windowPct } from './model'
+import { DEFAULT_FOOTER, availableNow, braille, browsersFrom, chromeNote, credentialFrom, credentialsFile, footerStyleFrom, healthOf, identityFromProfile, isNoBrowser, isPolicyRefusal, keychainItem, pickTarget, pie, readingFromUsage, rotateToFrom, shouldLeave, roomColor, weightOf, windowPct } from './model'
 
 const NOW = Date.parse('2026-10-12T10:00:00Z')
 const LATER = '2026-10-12T12:00:00Z'
@@ -30,10 +30,10 @@ function view(
   }
 }
 
-test('leaves at 90% of the 5-hour window or 95% of the week, and not before', () => {
-  expect(shouldLeave(view({ '1': [89, 94] }), NOW)).toBe(false)
+test('leaves at 90% of the 5-hour window or 98% of the week, and not before', () => {
+  expect(shouldLeave(view({ '1': [89, 97.9] }), NOW)).toBe(false)
   expect(shouldLeave(view({ '1': [90, 10] }), NOW)).toBe(true)
-  expect(shouldLeave(view({ '1': [10, 95] }), NOW)).toBe(true)
+  expect(shouldLeave(view({ '1': [10, 98] }), NOW)).toBe(true)
   expect(shouldLeave(view({ '1': [0, 0] }, { '1': { kind: 'login-needed', why: 'x' } }), NOW)).toBe(true)
 })
 
@@ -50,7 +50,7 @@ test('ranks logins by what they can serve now: the 5-hour room, nothing once the
   // A fresh session with a busy week beats a half-used session with a fresh week.
   expect(pickTarget(view({ '1': [95, 50], '2': [10, 80], '3': [50, 0] }), NOW)?.id).toBe('2')
   expect(availableNow({ fiveHour: { pct: 10, resetsAt: LATER }, sevenDay: { pct: 80, resetsAt: WEEK_END }, at: NOW }, NOW)).toBe(90)
-  expect(availableNow({ fiveHour: { pct: 10, resetsAt: LATER }, sevenDay: { pct: 96, resetsAt: WEEK_END }, at: NOW }, NOW)).toBe(0)
+  expect(availableNow({ fiveHour: { pct: 10, resetsAt: LATER }, sevenDay: { pct: 98, resetsAt: WEEK_END }, at: NOW }, NOW)).toBe(0)
   expect(availableNow({ fiveHour: { pct: 97, resetsAt: LATER }, at: NOW }, Date.parse(LATER) + 1)).toBe(100)
 })
 
@@ -120,10 +120,17 @@ test('reads who a token signs in from the profile endpoint body: its email and o
     account: { uuid: 'a-1', email: 'you@example.com', full_name: 'You' },
     organization: { uuid: 'o-1', name: 'Acme', organization_type: 'claude_team', rate_limit_tier: 'default_raven', seat_tier: 'team_standard' },
   }
-  expect(identityFromProfile(body)).toEqual({ email: 'you@example.com', orgId: 'o-1', orgName: 'Acme' })
+  expect(identityFromProfile(body)).toEqual({ email: 'you@example.com', orgId: 'o-1', orgName: 'Acme', tier: 'default_raven' })
   expect(identityFromProfile({ account: { email: 'you@example.com' } })).toEqual({ email: 'you@example.com' })
   expect(identityFromProfile({ organization: { uuid: 'o-1' } })).toBeUndefined()
   expect(identityFromProfile(null)).toBeUndefined()
+})
+
+test('a login counts toward the combined usage by its plan\'s size: Max 20x four times Max 5x, anything else as one', () => {
+  expect(weightOf({ tier: 'default_claude_max_20x' })).toBe(20)
+  expect(weightOf({ tier: 'default_claude_max_5x' })).toBe(5)
+  expect(weightOf({ tier: 'default_raven' })).toBe(1)
+  expect(weightOf({})).toBe(1)
 })
 
 test('a stored sign-in carries its plan, which Claude Code reads to tell a Team seat, and the refresh token a new sign-in replaces', () => {

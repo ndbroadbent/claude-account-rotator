@@ -23,13 +23,15 @@ export type Account = {
   orgName?: string
   /** `subscriptionType` as `claude auth status` reports it: max, team, pro. */
   plan?: string
+  /** The organization's rate-limit tier as the profile endpoint answers it, such as `default_claude_max_20x`. */
+  tier?: string
 }
 
 /**
  * Who a login's sign-in belongs to, as the profile endpoint answered for the
  * token `token` digests; the plan as Claude Code reads it from the sign-in.
  */
-export type Holder = { token: string; who: Pick<Account, 'email' | 'orgId' | 'orgName' | 'plan'> & { email: string } }
+export type Holder = { token: string; who: Pick<Account, 'email' | 'orgId' | 'orgName' | 'plan' | 'tier'> & { email: string } }
 
 /** How the footer draws one of its rows: a glyph per login, or not at all. */
 export type Glyphs = 'bars' | 'pie' | 'braille' | 'none'
@@ -69,6 +71,61 @@ export type ChromeLink = { as?: string; isPaired: boolean; hasFailed?: boolean }
 /** A run of the footer's text: its color, and the lighter one it takes while the pointer is over the footer. */
 export type FooterRun = { text: string; color?: string; lit?: string; backgroundColor?: string; dimColor?: boolean }
 
+/** The coordinator's own details, as it answers them. */
+export type CoordinatorInfo = { version: string; pid: number; startedAt: number; isManaged: boolean }
+
+/** One login as the coordinator shares it: the login, what it knows of it, and what follows from that. */
+export type AccountState = Account & {
+  health: Health
+  reading?: Reading
+  holder?: Holder
+  /** When its access token expires, epoch ms. */
+  expiresAt?: number
+  /** The plan's size: 20 for Max 20x, 5 for Max 5x, 1 for Pro or unknown. */
+  weight: number
+  /** Past the leave thresholds. */
+  isSpent: boolean
+  /** Being removed: sessions on it move off, then it is signed out and dropped. */
+  isRetiring?: boolean
+  /** Where sessions on it go once they must leave it; absent while they can stay or none can take over. */
+  moveTo?: string
+  /** Live sessions on it. */
+  sessionCount: number
+}
+
+/** One usage window across every signed-in login with a reading, weighted by plan size. */
+export type CombinedWindow = { pct: number; accounts: number; nextResetAt?: string }
+
+/** A Claude Code session the coordinator knows of. */
+export type SessionInfo = {
+  id: string
+  accountId: string
+  pid?: number
+  cwd?: string
+  isInteractive: boolean
+  isBlocked: boolean
+  isPending: boolean
+  since: number
+  lastSeen: number
+}
+
+/** Something every session should hear once: a toast in each, a desktop notification from the first that claims it. */
+export type Notice = { id: number; at: number; text: string; notify: boolean; accountId?: string }
+
+/** Everything the coordinator shares: what GET /state answers (docs/coordinator-api.md). */
+export type SharedState = {
+  version: number
+  coordinator: CoordinatorInfo
+  now: number
+  accounts: AccountState[]
+  combined: { fiveHour?: CombinedWindow; sevenDay?: CombinedWindow }
+  settings: { rotateTo: RotateTo; footer: FooterStyle }
+  chrome: { accountId?: string; accountIds: string[]; miss?: string }
+  sessions: SessionInfo[]
+  notices: Notice[]
+  signIn?: { accountId: string; since: number }
+}
+
 /** Everything the footer, band and pane draw from. */
 export type View = {
   accounts: Account[]
@@ -76,6 +133,18 @@ export type View = {
   health: Record<string, Health>
   /** Who each login's sign-in belongs to: a /login in a session on a login signs in there, whoever it signs in. */
   holders: Record<string, Holder>
+  /** When each login's access token expires, as the coordinator last read it. */
+  expiresAt?: Record<string, number>
+  /** Where the coordinator sends sessions on each login that must leave it. */
+  moveTo?: Record<string, string>
+  /** Logins being removed. */
+  retiring?: string[]
+  /** Live sessions on each login, every session counted. */
+  sessionCounts?: Record<string, number>
+  /** Usage across every login, as the coordinator weighs it. */
+  combined?: SharedState['combined']
+  /** The coordinator as last reached; `error` while it can't be. */
+  coordinator?: { info?: CoordinatorInfo; error?: string }
   /** The login this session sends its requests with. */
   activeId: string
   /** Set after a switch until a response shows the new login's usage. */

@@ -1,16 +1,8 @@
 import { atom, read, update } from 'claude-code'
-import type {
-  EngineInterface,
-  HookStream,
-  McpToolResult,
-  ProcessSpawnChunk,
-  ProcessSpawnResult,
-  Register,
-  SessionRateLimit,
-  Timer,
-} from 'claude-code'
+import type { EngineInterface, McpToolResult, Register, SessionRateLimit, Timer } from 'claude-code'
 
-import type { Account, FooterStyle, Health, Holder, Reading, RotateTo, View } from '../types'
+import type { Account, FooterStyle, Reading, RotateTo, SharedState, View } from '../types'
+import { VERSION, compareVersions } from '../coordinator/version'
 import {
   CHROME_SERVER,
   CHROME_TOOL,
@@ -20,34 +12,26 @@ import {
   browsersFrom,
   canConnectChrome,
   chromeNote,
-  credentialFrom,
-  credentialsFile,
-  fingerprint,
-  footerStyleFrom,
-  freeId,
-  healthOf,
-  identityFromProfile,
-  identityFromStatus,
-  isLoginOf,
   isNoBrowser,
   isOnNormalLogin,
   isPolicyRefusal,
-  keychainItem,
-  keychainUser,
   label,
   pickTarget,
-  rotateToFrom,
   readingFromLimits,
-  readingFromUsage,
-  sameLogin,
   sameUsage,
   shouldLeave,
-  slotEnv,
+  spentReading,
   windowPct,
 } from './model'
-import type { Credential, Identity } from './model'
 import { Band, Footer, Pane } from './view'
 import type { Actions } from './view'
+
+// Each session runs this mod. What every session shares (the logins, their usage
+// and health, the settings, which sessions are on which login) lives in one
+// coordinator process (coordinator/), which sessions reach over a Unix socket:
+// it reads the logins' sign-ins and polls their usage once for all of them, and
+// runs browser sign-ins. What only a session can do stays here: pointing its own
+// requests at a login, reporting its responses' usage, and Claude in Chrome.
 
 type Host = EngineInterface
 
@@ -67,10 +51,11 @@ const CONFIRM_GIVE_UP_MS = 4 * 60_000
 const REFRESH_GUARD_MS = 8 * 60_000
 /** How long the mod waits on Claude in Chrome to list its browsers, connecting first, before going on without. */
 const CHROME_WAIT_MS = 15_000
-/** A file only macOS has: there Claude Code keeps logins in the keychain, elsewhere (Linux) in a file each. */
-const MACOS_MARKER = '/System/Library/CoreServices/SystemVersion.plist'
-const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage'
-const PROFILE_URL = 'https://api.anthropic.com/api/oauth/profile'
+/** How long a long poll on the coordinator waits for a change. */
+const WAIT_MS = 50_000
+/** A response's usage goes to the coordinator when it moved by this many points, or this long after the last. */
+const REPORT_POINTS = 1
+const REPORT_EVERY_MS = 60_000
 const CONTINUE =
   'Claude Code switched to another of your Claude accounts because the previous one hit its usage limit or lost its sign-in. Continue where you left off.'
 
@@ -83,11 +68,6 @@ const viewAtom = atom({ plugin: 'account-rotator', key: 'view' } as const, EMPTY
  * below 144 columns. Kept in step with closes by the person and with reloads.
  */
 let isPaneShown = false
-/** The `claude auth login` child of the sign-in under way, so Cancel can end it. */
-let running: HookStream<ProcessSpawnChunk, ProcessSpawnResult> | undefined
-/** The login this session is signing in; a stored 'logging-in' from a session that died is checked again. */
-let signingIn: string | undefined
-let signInQueue: Promise<void> = Promise.resolve()
 /** A switch the refresh guard holds back: the latest one asked for, tried again each minute until it goes. */
 let held: { target: Account; why: string; timer: Timer } | undefined
 /** Logins a switch to did not take this session: the rotation leaves them be; Use now still tries. */
@@ -96,12 +76,17 @@ const untaken = new Set<string>()
 let movedAt: number | undefined
 /** Connect is under way: the rotation waits for it, and browser calls are held back. */
 let isConnectingChrome = false
+/** This session as the coordinator knows it: its id there, and the details it registers with. */
+let session: { key: string; pid?: number; slot: string; cwd?: string; isInteractive: boolean } | undefined
+/** The state version this session last read, and the notices it has shown. */
+let version = 0
+let lastNotice: number | undefined
+/** Claude Code's login, guessed for the Chrome extension, found no browser: not guessed again. */
+let chromeMiss: string | undefined
+/** The last reading reported, so a busy session doesn't report every response. */
+let reported: { id: string; reading: Reading } | undefined
 
-// ---------------------------------------------------------------- state
-// The view is this session's; the store is one JSON file every session of the
-// mod shares: the list of logins, each login's last reading and health under a
-// key of its own, so sessions writing different logins never collide, the
-// footer's look, and which login the rotation moves to.
+// ---------------------------------------------------------------- the view
 
 /** The view survives a hot reload as the code before wrote it: what this code added starts as in a new session. */
 const current = (v: View): View => ({ ...EMPTY_VIEW, ...v })
@@ -111,185 +96,204 @@ const setView = ($: Host, fn: (v: View) => View): Promise<View> => update($, vie
 const tell = ($: Host, text: string) => $.ui.toast(text, { timeoutMs: 8000 })
 const debug = ($: Host, text: string) => $.ui.log(`account-rotator: ${text}`, { to: 'debug' })
 
-function isAccount(value: unknown): value is Account {
-  if (typeof value !== 'object' || value === null) return false
-  const { id, slot } = value as Record<string, unknown>
-  return typeof id === 'string' && typeof slot === 'string'
-}
+// ---------------------------------------------------------------- the coordinator
 
-async function loadAccounts($: Host): Promise<Account[]> {
-  const stored = await $.store.get('accounts')
-  return Array.isArray(stored) ? stored.filter(isAccount) : []
-}
-
-async function saveAccounts($: Host, accounts: Account[]): Promise<void> {
-  await $.store.set('accounts', accounts)
-  await setView($, v => ({ ...v, accounts }))
-}
-
-async function saveReading($: Host, id: string, reading: Reading): Promise<void> {
-  await $.store.set(`reading:${id}`, reading)
-  await setView($, v => ({ ...v, readings: { ...v.readings, [id]: reading } }))
-}
-
-/** Stores a login's health; answers what it was before. */
-async function saveHealth($: Host, id: string, health: Health): Promise<Health | undefined> {
-  const before = (await getView($)).health[id]
-  await $.store.set(`health:${id}`, health)
-  await setView($, v => ({ ...v, health: { ...v.health, [id]: health } }))
-  return before
-}
-
-async function saveHolder($: Host, id: string, holder: Holder): Promise<void> {
-  await $.store.set(`holder:${id}`, holder)
-  await setView($, v => ({ ...v, holders: { ...v.holders, [id]: holder } }))
-}
-
-/** Folds what other sessions stored into this session's view. */
-async function mergeStore($: Host): Promise<void> {
-  const accounts = await loadAccounts($)
-  const readings: Record<string, Reading> = {}
-  const health: Record<string, Health> = {}
-  const holders: Record<string, Holder> = {}
-  for (const a of accounts) {
-    const r = await $.store.get(`reading:${a.id}`)
-    if (typeof r === 'object' && r !== null && typeof (r as Reading).at === 'number') readings[a.id] = r as Reading
-    const h = await $.store.get(`health:${a.id}`)
-    if (typeof h === 'object' && h !== null && typeof (h as Health).kind === 'string') health[a.id] = h as Health
-    const s = await $.store.get(`holder:${a.id}`)
-    if (typeof s === 'object' && s !== null && typeof (s as Holder).token === 'string' && typeof (s as Holder).who?.email === 'string') {
-      holders[a.id] = s as Holder
-    }
+class CoordinatorError extends Error {
+  status: number
+  constructor(status: number, message: string) {
+    super(message)
+    this.status = status
   }
-  const footer = footerStyleFrom(await $.store.get('footer'))
-  const rotateTo = rotateToFrom(await $.store.get('rotate-to'))
-  const chrome = await $.store.get('chrome-account')
-  const chromeAccountId = typeof chrome === 'string' && accounts.some(a => a.id === chrome) ? chrome : undefined
-  const seen = await $.store.get('chrome-accounts')
-  const chromeAccountIds = (Array.isArray(seen) ? seen : []).filter((id): id is string => typeof id === 'string' && accounts.some(a => a.id === id))
-  await setView($, v => {
-    const nextReadings: Record<string, Reading> = {}
-    const nextHealth: Record<string, Health> = {}
-    const nextHolders: Record<string, Holder> = {}
-    for (const a of accounts) {
-      const mine = v.readings[a.id]
-      const theirs = readings[a.id]
-      const reading = mine !== undefined && (theirs === undefined || mine.at >= theirs.at) ? mine : theirs
-      if (reading !== undefined) nextReadings[a.id] = reading
-      const own = v.health[a.id]
-      const h = signingIn === a.id ? own : (health[a.id] ?? own)
-      if (h !== undefined) nextHealth[a.id] = h
-      const holder = holders[a.id] ?? v.holders[a.id]
-      if (holder !== undefined) nextHolders[a.id] = holder
-    }
-    return { ...v, accounts, readings: nextReadings, health: nextHealth, holders: nextHolders, footer, rotateTo, chromeAccountId, chromeAccountIds }
+}
+
+async function socketPath($: Host): Promise<string> {
+  const dir = (await $.env.get('CLAUDE_ACCOUNT_ROTATOR_DIR')) ?? `${(await $.env.get('HOME')) ?? ''}/.claude/account-rotator`
+  return `${dir}/coordinator.sock`
+}
+
+/** One call to the coordinator: its JSON answer, or a CoordinatorError with its words. */
+async function api<T>($: Host, method: string, path: string, body?: unknown): Promise<T> {
+  const res = await $.http.fetch(`http://coordinator${path}`, {
+    method,
+    socketPath: await socketPath($),
+    headers: { 'content-type': 'application/json' },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   })
+  let parsed: unknown
+  try {
+    parsed = res.text === '' ? undefined : JSON.parse(res.text)
+  } catch {
+    // An answer that is not JSON is the coordinator failing; the status says so below.
+    parsed = undefined
+  }
+  if (!res.ok) {
+    const error = typeof parsed === 'object' && parsed !== null ? (parsed as { error?: unknown }).error : undefined
+    throw new CoordinatorError(res.status, typeof error === 'string' ? error : `the coordinator answered HTTP ${res.status}`)
+  }
+  return parsed as T
 }
 
-/** Changes the footer's look for every session. */
-async function setFooter($: Host, change: Partial<FooterStyle>): Promise<void> {
-  const footer = { ...(await getView($)).footer, ...change }
-  await $.store.set('footer', footer)
-  await setView($, v => ({ ...v, footer }))
-}
-
-/** Changes which login the rotation moves to, for every session. */
-async function setRotateTo($: Host, rotateTo: RotateTo): Promise<void> {
-  await $.store.set('rotate-to', rotateTo)
-  await setView($, v => ({ ...v, rotateTo }))
-}
-
-/** Names the account the Chrome extension is signed in to, for every session; none forgets it. */
-async function setChromeAccount($: Host, id: string | undefined): Promise<void> {
-  if (id === undefined) await $.store.delete('chrome-account')
-  else await $.store.set('chrome-account', id)
-  await setView($, v => ({ ...v, chromeAccountId: id }))
-}
-
-/** A Chrome extension answered as `id`, or none did, or the account is gone: the Chrome box lists it, or not, for every session. */
-async function noteChromeAccount($: Host, id: string, isSeen: boolean): Promise<void> {
-  const stored = await $.store.get('chrome-accounts')
-  const before = Array.isArray(stored) ? stored.filter((x): x is string => typeof x === 'string') : []
-  const ids = isSeen ? [...new Set([...before, id])] : before.filter(x => x !== id)
-  if (ids.length !== before.length) await $.store.set('chrome-accounts', ids)
-  await setView($, v => ({ ...v, chromeAccountIds: ids }))
-}
-
-// ---------------------------------------------------------------- host
-
-type Stored = { state: 'present'; credential: Credential | undefined } | { state: 'absent' } | { state: 'unreadable'; code: number }
-
-/** A slot's stored login, from the keychain on macOS or its file elsewhere (Linux); the secret stays in this module. */
-async function readStored($: Host, slot: string): Promise<Stored> {
-  return (await $.fs.exists(MACOS_MARKER)) ? readKeychain($, slot) : readCredentialsFile($, slot)
-}
-
-async function readKeychain($: Host, slot: string): Promise<Stored> {
-  const user = keychainUser(await $.env.get('USER'))
-  const argv = ['security', 'find-generic-password', '-a', user, '-w', '-s', await keychainItem(slot)]
-  const { exitCode, stdout } = await $.process.run(argv, { timeoutMs: 10_000 })
-  if (exitCode === 44) return { state: 'absent' }
-  if (exitCode !== 0) return { state: 'unreadable', code: exitCode }
-  return { state: 'present', credential: credentialFrom(stdout.trim()) }
+/** Calls the coordinator and takes the state it answers with. */
+async function act($: Host, method: string, path: string, body?: unknown): Promise<SharedState> {
+  const answer = await api<{ state: SharedState }>($, method, path, body)
+  await applyState($, answer.state)
+  return answer.state
 }
 
 /**
- * A file that cannot be read holds no login, as Claude Code counts it: a
- * missing or locked file, and one caught mid-write (Claude Code renames a new
- * one into place, rewriting it in place only where that fails).
+ * Makes sure a coordinator this version or newer runs: starts one where none
+ * answers (launchd's, where it is installed), and upgrades an older one.
  */
-async function readCredentialsFile($: Host, slot: string): Promise<Stored> {
-  const path = credentialsFile(slot, await $.env.get('HOME'))
-  const text = path === undefined ? undefined : await $.fs.read(path).catch(() => undefined)
-  return text === undefined ? { state: 'absent' } : { state: 'present', credential: credentialFrom(text) }
-}
-
-type UsageAnswer = { kind: 'ok'; body: unknown } | { kind: 'rejected' } | { kind: 'failed'; status: number }
-
-const oauthHeaders = (accessToken: string) => ({
-  Authorization: `Bearer ${accessToken}`,
-  'anthropic-beta': 'oauth-2025-04-20',
-  'Content-Type': 'application/json',
-})
-
-/** The usage of the login a token belongs to, as `/usage` reads it. */
-async function fetchUsage($: Host, accessToken: string): Promise<UsageAnswer> {
-  const res = await $.http.fetch(USAGE_URL, { headers: oauthHeaders(accessToken) })
-  if (res.status === 401 || res.status === 403) return { kind: 'rejected' }
-  if (!res.ok) return { kind: 'failed', status: res.status }
+async function ensureCoordinator($: Host): Promise<void> {
+  const hello = await api<{ version: string }>($, 'GET', '/hello').catch(() => undefined)
+  if (hello !== undefined && compareVersions(hello.version, VERSION) >= 0) return
+  const verb = hello === undefined ? 'start' : 'upgrade'
+  let result
   try {
-    return { kind: 'ok', body: JSON.parse(res.text) }
-  } catch {
-    // A 2xx that is not JSON counts as a failed call; the next check asks again.
-    return { kind: 'failed', status: res.status }
+    result = await $.process.run(['node', `${$.plugin.root}/coordinator/cli.ts`, verb], { timeoutMs: 90_000 })
+  } catch (error) {
+    throw new Error(`could not run node to start the account coordinator (it needs Node.js 22.18 or later on PATH): ${String(error)}`)
   }
+  if (result.exitCode !== 0) throw new Error((result.stderr.trim() || result.stdout.trim() || `coordinator ${verb} failed`).slice(0, 300))
 }
 
-/** Who a token signs in, as Claude Code asks at a sign-in: email, organization and plan; undefined when the call fails. */
-async function fetchIdentity($: Host, accessToken: string): Promise<Identity | undefined> {
-  const res = await $.http.fetch(PROFILE_URL, { headers: oauthHeaders(accessToken) })
-  if (!res.ok) return undefined
-  try {
-    return identityFromProfile(JSON.parse(res.text))
-  } catch {
-    // A body that is not JSON says nothing of who; the next check asks again.
-    return undefined
-  }
-}
-
-/** Who a slot is signed in as: email, organization and plan. */
-async function signedInAs($: Host, slot: string): Promise<Identity | undefined> {
-  const { exitCode, stdout } = await $.process.run(['claude', 'auth', 'status', '--json'], {
-    env: slotEnv(slot),
-    timeoutMs: 20_000,
+async function registerSession($: Host): Promise<void> {
+  if (session === undefined) return
+  const answer = await api<{ accountId: string; state: SharedState }>($, 'POST', '/sessions', {
+    id: session.key,
+    slot: session.slot,
+    isInteractive: session.isInteractive,
+    ...(session.pid === undefined ? {} : { pid: session.pid }),
+    ...(session.cwd === undefined ? {} : { cwd: session.cwd }),
   })
-  return exitCode === 0 ? identityFromStatus(stdout) : undefined
+  await applyState($, answer.state, answer.accountId)
+  const view = await getView($)
+  // A coordinator that restarted learns again what it can't tell from the slot.
+  if (view.isSwitchBlocked || view.pending !== undefined) {
+    await patchSession($, { isBlocked: view.isSwitchBlocked === true, isPending: view.pending !== undefined }, false)
+  }
 }
+
+/** Tells the coordinator what changed in this session; one that no longer knows it (it restarted) gets it registered again, once. */
+function patchSession($: Host, patch: { accountId?: string; isBlocked?: boolean; isPending?: boolean }, canRegister = true): Promise<void> {
+  if (session === undefined) return Promise.resolve()
+  return api($, 'PATCH', `/sessions/${encodeURIComponent(session.key)}`, patch)
+    .then(() => undefined)
+    .catch(async error => {
+      if (canRegister && error instanceof CoordinatorError && error.status === 404) await registerSession($)
+      else await debug($, `session update failed: ${String(error)}`)
+    })
+}
+
+/**
+ * Takes the coordinator's state into this session's view. A reading this
+ * session made itself and the coordinator hasn't caught up with stays. New
+ * notices show as toasts; the first session to claim one that asks for it
+ * posts the desktop notification.
+ */
+async function applyState($: Host, state: SharedState, activeId?: string): Promise<void> {
+  if (state.version < version && state.coordinator.startedAt === (await getView($)).coordinator?.info?.startedAt) return
+  version = state.version
+  chromeMiss = state.chrome.miss
+  const accounts: Account[] = state.accounts.map(a => ({
+    id: a.id,
+    slot: a.slot,
+    ...(a.email === undefined ? {} : { email: a.email }),
+    ...(a.orgId === undefined ? {} : { orgId: a.orgId }),
+    ...(a.orgName === undefined ? {} : { orgName: a.orgName }),
+    ...(a.plan === undefined ? {} : { plan: a.plan }),
+    ...(a.tier === undefined ? {} : { tier: a.tier }),
+  }))
+  await setView($, v => {
+    const readings: Record<string, Reading> = {}
+    for (const a of state.accounts) {
+      const mine = v.readings[a.id]
+      const theirs = a.reading
+      const reading = mine !== undefined && (theirs === undefined || mine.at > theirs.at) ? mine : theirs
+      if (reading !== undefined) readings[a.id] = reading
+    }
+    const pick = <T,>(f: (a: SharedState['accounts'][number]) => T | undefined): Record<string, T> =>
+      Object.fromEntries(state.accounts.flatMap(a => {
+        const value = f(a)
+        return value === undefined ? [] : [[a.id, value] as const]
+      }))
+    return {
+      ...v,
+      accounts,
+      readings,
+      health: pick(a => a.health),
+      holders: pick(a => a.holder),
+      expiresAt: pick(a => a.expiresAt),
+      moveTo: pick(a => a.moveTo),
+      retiring: state.accounts.filter(a => a.isRetiring).map(a => a.id),
+      sessionCounts: pick(a => a.sessionCount),
+      combined: state.combined,
+      footer: state.settings.footer,
+      rotateTo: state.settings.rotateTo,
+      chromeAccountId: state.chrome.accountId,
+      chromeAccountIds: state.chrome.accountIds,
+      coordinator: { info: state.coordinator },
+      ...(activeId === undefined ? {} : { activeId }),
+    }
+  })
+  await showNotices($, state)
+}
+
+async function showNotices($: Host, state: SharedState): Promise<void> {
+  const newest = state.notices.at(-1)?.id ?? 0
+  if (lastNotice === undefined) {
+    // A session shows what happens after it starts, not what happened before.
+    lastNotice = newest
+    return
+  }
+  const fresh = state.notices.filter(n => n.id > (lastNotice ?? 0))
+  lastNotice = Math.max(lastNotice, newest)
+  for (const notice of fresh) {
+    $.ui.toast(notice.text, { timeoutMs: 8000 })
+    if (!notice.notify || session === undefined) continue
+    const { claimed } = await api<{ claimed: boolean }>($, 'POST', `/notices/${notice.id}/claim`, { sessionId: session.key }).catch(() => ({ claimed: false }))
+    if (claimed) await $.ui.notify(notice.text, { title: TITLE })
+  }
+}
+
+/**
+ * Follows the coordinator for the session's life: a long poll that answers on
+ * each change. A coordinator gone (restarted, upgraded, killed) is started
+ * again and the session registered there again. Ends with the module.
+ */
+async function watch($: Host): Promise<void> {
+  let failures = 0
+  for (;;) {
+    try {
+      const key = session === undefined ? '' : `&session=${encodeURIComponent(session.key)}`
+      const state = await api<SharedState>($, 'GET', `/state?since=${version}&wait=${WAIT_MS}${key}`)
+      if (failures > 0) await setView($, v => ({ ...v, coordinator: { info: state.coordinator } }))
+      failures = 0
+      if (session !== undefined && !state.sessions.some(s => s.id === session?.key)) await registerSession($)
+      else if (state.version !== version) await applyState($, state)
+      await settlePending($, false)
+      await maybeRotate($)
+    } catch (error) {
+      failures += 1
+      const why = error instanceof Error ? error.message : String(error)
+      await setView($, v => ({ ...v, coordinator: { ...(v.coordinator?.info ? { info: v.coordinator.info } : {}), error: why } }))
+      // Rejects once the module is gone, which ends the loop.
+      await $.clock.sleep(Math.min(30_000, 2_000 * failures))
+      if (failures === 1 || failures % 5 === 0) {
+        await ensureCoordinator($).catch(async e => debug($, `coordinator start failed: ${String(e)}`))
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------- switching
 
 /** Points this session's requests, and every child it starts after, at a slot's login. */
 async function useSlot($: Host, slot: string): Promise<void> {
   if (slot === '') await $.env.set('CLAUDE_SECURESTORAGE_CONFIG_DIR', undefined)
   else await $.env.set('CLAUDE_SECURESTORAGE_CONFIG_DIR', slot)
+  // Registered again (a coordinator restarted), the session is on the login this slot holds.
+  if (session !== undefined) session.slot = slot
 }
 
 /**
@@ -301,6 +305,7 @@ async function blocked($: Host): Promise<boolean> {
   const view = await getView($)
   if (view.isSwitchBlocked) return false
   await setView($, v => ({ ...v, isSwitchBlocked: true }))
+  void patchSession($, { isBlocked: true })
   const text = blockedText(isOnNormalLogin(view))
   $.ui.toast(text, { timeoutMs: 15_000 })
   await $.ui.notify(text, { title: TITLE })
@@ -320,110 +325,10 @@ async function checkSwitching($: Host, slot: string): Promise<void> {
   }
 }
 
-// ---------------------------------------------------------------- checks and switching
-
-async function announceLockout($: Host, account: Account, why: string): Promise<void> {
-  const text = `Claude account ${label(account)} needs a sign-in (${why}). Click ⚠${account.id} under the prompt.`
-  $.ui.toast(text, { timeoutMs: 8000 })
-  await $.ui.notify(text, { title: TITLE })
-}
-
-/**
- * Who a login's sign-in belongs to: as answered for its token before, else
- * asked while the token is live. A /login in a session on a login signs in
- * there, and a new sign-in brings a new token, so it is asked about again.
- */
-async function holderOf($: Host, account: Account, credential: Credential, isLive: boolean): Promise<Holder | undefined> {
-  const token = await fingerprint(credential.refreshToken ?? credential.accessToken)
-  const known = (await getView($)).holders[account.id]
-  if (known?.token === token) return known
-  if (!isLive) return undefined
-  const who = await fetchIdentity($, credential.accessToken)
-  if (who?.email === undefined) return undefined
-  const holder = { token, who: { ...who, email: who.email, ...(credential.plan === undefined ? {} : { plan: credential.plan }) } }
-  await saveHolder($, account.id, holder)
-  return holder
-}
-
-/**
- * A login's sign-in belongs to `who`. Another login on the list: this one
- * holds that one's sign-in, answered so it asks for its own again. Else the
- * login is who signed in, its name and plan kept current, and told when that
- * is another account than before: a /login in a session on it did that.
- */
-async function followSignIn($: Host, account: Account, who: Identity): Promise<Account | undefined> {
-  const accounts = await loadAccounts($)
-  const own = accounts.find(a => a.id === account.id)
-  if (own === undefined) return undefined
-  const isSame = own.email === undefined || isLoginOf(own, who)
-  const twin = isSame ? undefined : accounts.find(a => a.id !== own.id && isLoginOf(a, who))
-  if (twin !== undefined) return twin
-  const followed = { ...own, ...who }
-  if (followed.email !== own.email || followed.orgId !== own.orgId || followed.orgName !== own.orgName || followed.plan !== own.plan) {
-    await saveAccounts($, accounts.map(a => (a.id === own.id ? followed : a)))
-  }
-  if (!isSame) {
-    const name = `${followed.email}${followed.orgName ? ` · ${followed.orgName}` : ''}`
-    tell(
-      $,
-      own.slot === ''
-        ? `Claude Code's login, account ${own.id}, is ${name} now: new sessions start on it.`
-        : `Claude account ${own.id} is ${name} now: a /login in a session on account ${own.id} signs in there, not Claude Code's login.`,
-    )
-  }
-  return undefined
-}
-
-/**
- * Re-reads one login's stored sign-in: who it belongs to and, while its token
- * is live, its usage. One that is another login's on the list leaves this
- * login needing its own, its usage that other's.
- */
-async function checkAccount($: Host, account: Account): Promise<void> {
-  const now = await $.clock.now()
-  if (signingIn === account.id) return
-  const stored = await readStored($, account.slot)
-  if (stored.state === 'unreadable') {
-    tell($, `Could not read Claude account ${account.id} from the keychain (exit ${stored.code}); is it locked?`)
-    return
-  }
-  const credential = stored.state === 'present' ? stored.credential : undefined
-  let health = healthOf(credential, now)
-  if (health.kind === 'ok' && credential !== undefined) {
-    const isLive = credential.expiresAt > now + 60_000
-    const holder = await holderOf($, account, credential, isLive)
-    const twin = holder === undefined ? undefined : await followSignIn($, account, holder.who)
-    if (twin !== undefined) health = { kind: 'login-needed', why: `signed in as account ${twin.id} now` }
-    else if (isLive) {
-      const usage = await fetchUsage($, credential.accessToken)
-      if (usage.kind === 'rejected') health = { kind: 'login-needed', why: 'sign-in rejected' }
-      if (usage.kind === 'failed') await debug($, `usage for account ${account.id}: HTTP ${usage.status}`)
-      if (usage.kind === 'ok') {
-        const reading = readingFromUsage(usage.body, now)
-        if (reading !== undefined) await saveReading($, account.id, reading)
-      }
-    }
-  }
-  const before = await saveHealth($, account.id, health)
-  if (health.kind === 'login-needed' && before?.kind !== 'login-needed') {
-    await announceLockout($, account, health.why)
-  }
-}
-
-async function checkAll($: Host): Promise<void> {
-  for (const account of (await getView($)).accounts) {
-    try {
-      await checkAccount($, account)
-    } catch (error) {
-      await debug($, `checking account ${account.id} failed: ${String(error)}`)
-    }
-  }
-  await maybeRotate($)
-}
-
 /** Why the login in use is left, counted the way the footer shows it: room left, or what is used. */
 function whyLeave(view: View, now: number): string {
   if (view.health[view.activeId]?.kind === 'login-needed') return `account ${view.activeId} needs a sign-in`
+  if (view.retiring?.includes(view.activeId)) return `account ${view.activeId} is being removed`
   const r = view.readings[view.activeId]
   const five = windowPct(r?.fiveHour, now) ?? 0
   const [window, used] = five >= LEAVE_FIVE_HOUR ? ['5-hour window', five] : ['week', windowPct(r?.sevenDay, now) ?? 0]
@@ -432,33 +337,51 @@ function whyLeave(view: View, now: number): string {
     : `account ${view.activeId} has used ${Math.round(used)}% of its ${window}`
 }
 
+/** Where a session that must leave the login it is on goes: the coordinator's pick, else its own without the logins a switch didn't take here. */
+function targetFor(view: View, now: number): Account | undefined {
+  const shared = view.moveTo?.[view.activeId]
+  if (shared !== undefined && !untaken.has(shared)) return view.accounts.find(a => a.id === shared)
+  return pickTarget({ ...view, accounts: view.accounts.filter(a => !untaken.has(a.id)) }, now)
+}
+
+/** The rotation check under way: the coordinator's changes, a response and a timer can all ask at once, and one switch answers them all. */
+let rotating: Promise<boolean> | undefined
+
 /**
- * Once the active login is spent or locked out, moves to the one the pane's
- * Rotation setting picks; never while it is off, Claude Code's policy refuses
- * it, or Connect holds the session where it is.
+ * Once the active login is spent, locked out or being removed, moves to where
+ * the coordinator sends sessions on it; never while the rotation is off,
+ * Claude Code's policy refuses it, or Connect holds the session where it is.
  */
-async function maybeRotate($: Host): Promise<boolean> {
+function maybeRotate($: Host): Promise<boolean> {
+  rotating ??= rotateOnce($).finally(() => {
+    rotating = undefined
+  })
+  return rotating
+}
+
+async function rotateOnce($: Host): Promise<boolean> {
   const now = await $.clock.now()
   const view = await getView($)
-  if (isConnectingChrome || view.rotateTo === 'off' || view.isSwitchBlocked || view.pending !== undefined || !shouldLeave(view, now)) return false
+  if (view.accounts.length === 0 || isConnectingChrome || view.isSwitchBlocked || view.pending !== undefined || !shouldLeave(view, now)) return false
+  const isRetiring = view.retiring?.includes(view.activeId) === true
+  if (view.rotateTo === 'off' && !isRetiring) return false
   // With none to move to, the band above the prompt says when the next login frees up.
-  const target = pickTarget({ ...view, accounts: view.accounts.filter(a => !untaken.has(a.id)) }, now)
+  const target = targetFor(view, now)
   return target === undefined ? false : switchTo($, target, whyLeave(view, now))
 }
 
 /** The login in use, when its token refreshes too soon for the refresh guard to let the session leave it for `target`. */
-async function refreshingSoon($: Host, view: View, target: Account, now: number): Promise<Account | undefined> {
+function refreshingSoon(view: View, target: Account, now: number): Account | undefined {
   const active = view.accounts.find(a => a.id === view.activeId)
   if (active === undefined || active.id === target.id) return undefined
-  const stored = await readStored($, active.slot)
-  const credential = stored.state === 'present' ? stored.credential : undefined
-  const isSoon = credential !== undefined && credential.expiresAt > now && credential.expiresAt - now < REFRESH_GUARD_MS
+  const expiresAt = view.expiresAt?.[active.id]
+  const isSoon = expiresAt !== undefined && expiresAt > now && expiresAt - now < REFRESH_GUARD_MS
   return isSoon ? active : undefined
 }
 
 /** Points this session at `target`; false while the refresh guard holds it back, or Claude Code's policy refuses it. Quiet: no toast. */
 async function switchTo($: Host, target: Account, why: string, isQuiet = false): Promise<boolean> {
-  const active = await refreshingSoon($, await getView($), target, await $.clock.now())
+  const active = refreshingSoon(await getView($), target, await $.clock.now())
   if (active !== undefined) {
     if (held === undefined) {
       tell($, `Switching to Claude account ${target.id} in a few minutes, once account ${active.id}'s token has refreshed.`)
@@ -482,12 +405,14 @@ async function switchTo($: Host, target: Account, why: string, isQuiet = false):
   }
   const now = await $.clock.now()
   movedAt = now
+  reported = undefined
   await setView($, v => ({
     ...v,
     activeId: target.id,
     pending: { id: target.id, from: v.activeId, since: now },
     removing: undefined,
   }))
+  void patchSession($, { accountId: target.id, isPending: true })
   if (!isQuiet) $.ui.toast(`Switched to Claude account ${label(target)}: ${why}.`, { timeoutMs: 6000 })
   return true
 }
@@ -505,16 +430,17 @@ async function settlePending($: Host, isResponse: boolean): Promise<void> {
   const now = await $.clock.now()
   if (now - pending.since < SETTLE_MS) return
   const reading = readingFromLimits((await $.session.usage()).rateLimits, now)
-  const target = accounts.find(a => a.id === pending.id)
-  if (target !== undefined) await checkAccount($, target)
+  await act($, 'POST', `/accounts/${pending.id}/check`, { fresh: true }).catch(error => debug($, `check of account ${pending.id} failed: ${String(error)}`))
   if (sameUsage(reading, (await getView($)).readings[pending.id], now)) {
     untaken.delete(pending.id)
     await setView($, v => ({ ...v, pending: undefined }))
+    void patchSession($, { isPending: false })
   } else if (isResponse && now - pending.since > CONFIRM_GIVE_UP_MS) {
     const from = accounts.find(a => a.id === pending.from)
-    if (from !== undefined) await checkAccount($, from)
+    if (from !== undefined) await act($, 'POST', `/accounts/${from.id}/check`, { fresh: true }).catch(() => undefined)
     if (from === undefined || !sameUsage(reading, (await getView($)).readings[from.id], now)) {
       await setView($, v => ({ ...v, pending: undefined }))
+      void patchSession($, { isPending: false })
       tell($, `The switch to Claude account ${pending.id} has not shown in responses.`)
       return
     }
@@ -526,12 +452,24 @@ async function settlePending($: Host, isResponse: boolean): Promise<void> {
       await debug($, `switch back failed: ${String(error)}`)
     }
     await setView($, v => ({ ...v, activeId: from.id, pending: undefined }))
+    void patchSession($, { accountId: from.id, isPending: false })
     tell(
       $,
       `The switch to Claude account ${pending.id} did not take: responses still use account ${label(from)}, so it shows in use again. ` +
         `The rotation leaves account ${pending.id} be in this session; Use now tries it again.`,
     )
   }
+}
+
+/** Reports a response's usage to the coordinator, once it has moved enough or a while has passed. */
+async function report($: Host, id: string, reading: Reading): Promise<void> {
+  const last = reported?.id === id ? reported.reading : undefined
+  const moved = (a: Reading['fiveHour'], b: Reading['fiveHour']) =>
+    (a === undefined) !== (b === undefined) || (a !== undefined && b !== undefined && (Math.abs(a.pct - b.pct) >= REPORT_POINTS || a.resetsAt !== b.resetsAt))
+  const isDue = last === undefined || reading.at - last.at >= REPORT_EVERY_MS || moved(last.fiveHour, reading.fiveHour) || moved(last.sevenDay, reading.sevenDay)
+  if (!isDue) return
+  reported = { id, reading }
+  await act($, 'POST', '/readings', { accountId: id, reading, ...(session === undefined ? {} : { sessionId: session.key }) })
 }
 
 /** A response's own usage: the active login's, unless a switch is still settling. */
@@ -542,8 +480,10 @@ async function onMeasure($: Host, limits: readonly SessionRateLimit[]): Promise<
     return
   }
   const reading = readingFromLimits(limits, await $.clock.now())
-  if (reading === undefined) return
-  await saveReading($, view.activeId, reading)
+  if (reading === undefined || view.accounts.length === 0) return
+  const id = view.activeId
+  await setView($, v => ({ ...v, readings: { ...v.readings, [id]: reading } }))
+  await report($, id, reading).catch(error => debug($, `usage report failed: ${String(error)}`))
   await maybeRotate($)
 }
 
@@ -553,19 +493,11 @@ async function onStopFailure($: Host, error: string): Promise<void> {
   const view = await getView($)
   const active = view.accounts.find(a => a.id === view.activeId)
   if (active === undefined) return
-  if (error === 'authentication_failed') {
-    const before = await saveHealth($, active.id, { kind: 'login-needed', why: 'sign-in rejected' })
-    if (before?.kind !== 'login-needed') await announceLockout($, active, 'sign-in rejected')
-  } else {
-    await checkAccount($, active)
+  await act($, 'POST', `/accounts/${active.id}/${error === 'rate_limit' ? 'spent' : 'rejected'}`, session === undefined ? {} : { sessionId: session.key })
+  if (error === 'rate_limit') {
+    // The coordinator's reading may be older than this session's own: the limit was hit, so the window that limits it is full.
     const now = await $.clock.now()
-    const after = await getView($)
-    if (!shouldLeave(after, now)) {
-      // The limit was hit before the usage call shows it: count the 5-hour window as full.
-      const r = after.readings[active.id]
-      const resetsAt = r?.fiveHour?.resetsAt
-      await saveReading($, active.id, { ...r, fiveHour: { pct: 100, ...(resetsAt ? { resetsAt } : {}) }, at: now })
-    }
+    await setView($, v => (shouldLeave(v, now) ? v : { ...v, readings: { ...v.readings, [active.id]: spentReading(v.readings[active.id], now) } }))
   }
   await setView($, v => ({ ...v, pending: undefined }))
   if (await maybeRotate($)) {
@@ -591,6 +523,21 @@ let hasChromeMissed = false
 let isAskingChrome = false
 /** A turn hit a usage limit while Connect held the session on the extension's account: it carries on once the session is back. */
 let isCutByVisit = false
+
+/** Names the account the Chrome extension is signed in to, for every session; none forgets it. */
+async function setChromeAccount($: Host, id: string | undefined): Promise<void> {
+  await setView($, v => ({ ...v, chromeAccountId: id }))
+  await act($, 'PATCH', '/chrome', { accountId: id ?? null })
+}
+
+/** A Chrome extension answered as `id`, or none did: the Chrome box lists it, or not, for every session. */
+async function noteChromeAccount($: Host, id: string, isSeen: boolean): Promise<void> {
+  await setView($, v => {
+    const before = v.chromeAccountIds ?? []
+    return { ...v, chromeAccountIds: isSeen ? [...new Set([...before, id])] : before.filter(x => x !== id) }
+  })
+  await act($, 'PATCH', '/chrome', { seen: { accountId: id, isSeen } })
+}
 
 /**
  * Asks Claude in Chrome which browsers answer, connecting it if this session
@@ -641,7 +588,10 @@ async function noteChrome($: Host, as: Account, answer: ChromeAnswer): Promise<v
   }))
   await noteChromeAccount($, as.id, isPaired)
   if (isPaired) await learnChrome($, as)
-  else if ((await getView($)).chromeAccountId === undefined && as.slot === '') await $.store.set('chrome-miss', as.id)
+  else if ((await getView($)).chromeAccountId === undefined && as.slot === '') {
+    chromeMiss = as.id
+    await act($, 'PATCH', '/chrome', { miss: as.id })
+  }
 }
 
 /**
@@ -657,7 +607,7 @@ async function keepChrome($: Host): Promise<void> {
   if (movedAt !== undefined && (await $.clock.now()) - movedAt < SETTLE_MS) return
   const active = view.accounts.find(a => a.id === view.activeId)
   if (active === undefined) return
-  const isGuess = view.chromeAccountId === undefined && active.slot === '' && (await $.store.get('chrome-miss')) !== active.id
+  const isGuess = view.chromeAccountId === undefined && active.slot === '' && chromeMiss !== active.id
   if (view.chromeAccountId !== active.id && !isGuess) return
   await noteChrome($, active, await askChrome($))
 }
@@ -734,7 +684,7 @@ async function connectingChrome(
   if (target === undefined || from === undefined || !canConnectChrome({ ...view, chromeAccountId: target.id })) return undefined
   // Tried for the extension: the account picked before stays its own until a browser answers as this one.
   const isTrial = target.id !== view.chromeAccountId
-  const active = await refreshingSoon($, view, target, await $.clock.now())
+  const active = refreshingSoon(view, target, await $.clock.now())
   if (active !== undefined) {
     if (!isQuiet) tell($, `Chrome can connect as account ${target.id} once account ${active.id}'s token has refreshed: try again in a few minutes.`)
     return undefined
@@ -778,8 +728,8 @@ async function connectingChrome(
 
 /**
  * After Connect's visit: back to the login the session was on, while it can
- * serve, or with the rotation off; else on to the one the rotation picks. The
- * extension's account's usage is not the session's to spend.
+ * serve, or with the rotation off; else on to the one the coordinator picks.
+ * The extension's account's usage is not the session's to spend.
  */
 async function leaveVisit($: Host, from: Account): Promise<void> {
   const now = await $.clock.now()
@@ -790,7 +740,7 @@ async function leaveVisit($: Host, from: Account): Promise<void> {
     await switchTo($, from, 'back from connecting Claude in Chrome', true)
     return
   }
-  const target = pickTarget({ ...view, accounts: view.accounts.filter(a => !untaken.has(a.id)) }, now)
+  const target = targetFor({ ...view, activeId: from.id }, now)
   if (target !== undefined) await switchTo($, target, whyLeave({ ...view, activeId: from.id }, now))
 }
 
@@ -827,120 +777,6 @@ async function onBrowserCall($: Host, isUnanswered: boolean): Promise<string | u
   return chromeNote(after, 'connecting')
 }
 
-// ---------------------------------------------------------------- sign-in
-
-/** Signs one login in through the browser; its slot gets the new credential. */
-async function signIn($: Host, account: Account): Promise<void> {
-  const since = await $.clock.now()
-  await saveHealth($, account.id, { kind: 'logging-in', since })
-  const argv = ['claude', 'auth', 'login', '--claudeai', ...(account.email ? ['--email', account.email] : [])]
-  // The child opens the browser itself. The link it prints is the paste-a-code
-  // flow, which a background child cannot finish, so stdout goes unread.
-  const child = $.process.spawn({ argv, env: slotEnv(account.slot) })
-  running = child
-  signingIn = account.id
-  let errors = ''
-  try {
-    for await (const { stream, text } of child) {
-      if (stream === 'stderr') errors += text
-    }
-  } catch (error) {
-    errors += String(error)
-  } finally {
-    running = undefined
-    signingIn = undefined
-  }
-  const code = await child.result.then(r => r.code, () => null)
-  await saveHealth($, account.id, { kind: 'login-needed', why: 'sign-in not finished' })
-  if (code !== 0) {
-    tell($, `Sign-in for Claude account ${account.id} did not finish${errors.trim() ? `: ${errors.trim().slice(0, 160)}` : '.'}`)
-    return
-  }
-  await adoptSignIn($, account)
-}
-
-/** After a browser sign-in: who signed in, and is it a login already on the list? */
-async function adoptSignIn($: Host, account: Account): Promise<void> {
-  const who = await signedInAs($, account.slot)
-  const accounts = await loadAccounts($)
-  const twin = who === undefined ? undefined : accounts.find(a => a.id !== account.id && sameLogin(a, who))
-  if (twin !== undefined) {
-    await saveHealth($, account.id, { kind: 'login-needed', why: `that was account ${label(twin)} again` })
-    tell(
-      $,
-      `Claude account ${account.id} signed in as account ${label(twin)}. Sign out of claude.ai in your browser (or pick another organization), then sign in again.`,
-    )
-    return
-  }
-  const updated = accounts.map(a => (a.id === account.id && who !== undefined ? { ...a, ...who } : a))
-  await saveAccounts($, updated)
-  await saveHealth($, account.id, { kind: 'ok' })
-  const fresh = updated.find(a => a.id === account.id) ?? account
-  await checkAccount($, fresh)
-  await maybeRotate($)
-}
-
-function queueSignIn(work: () => Promise<void>): Promise<void> {
-  signInQueue = signInQueue.then(work, work)
-  return signInQueue
-}
-
-/** Signs in, one after another, every login that needs it. */
-const signInAll = ($: Host) =>
-  queueSignIn(async () => {
-    const view = await getView($)
-    for (const account of view.accounts.filter(a => view.health[a.id]?.kind === 'login-needed')) {
-      await signIn($, account)
-    }
-  })
-
-const signInOne = ($: Host, id: string) =>
-  queueSignIn(async () => {
-    const account = (await getView($)).accounts.find(a => a.id === id)
-    if (account !== undefined) await signIn($, account)
-  })
-
-/** Adds a login in a new slot under ~/.claude/accounts and signs it in. */
-async function addAccount($: Host): Promise<void> {
-  const accounts = await loadAccounts($)
-  const id = freeId(accounts)
-  const slot = `${(await $.env.get('HOME')) ?? ''}/.claude/accounts/${id}`
-  await $.fs.write(`${slot}/README`, `Claude account ${id}, kept by the account-rotator mod.\n`)
-  await saveAccounts($, [...accounts, { id, slot }])
-  await saveHealth($, id, { kind: 'login-needed', why: 'not signed in yet' })
-  await signInOne($, id)
-}
-
-/** The second press of Remove: signs the slot out, then drops it from the list. */
-async function removeAccount($: Host, id: string): Promise<void> {
-  const view = await getView($)
-  const account = view.accounts.find(a => a.id === id)
-  if (account === undefined || account.slot === '') return
-  if (view.activeId === id) {
-    const other = view.accounts.find(a => a.id !== id && view.health[a.id]?.kind === 'ok')
-    if (other === undefined || !(await switchTo($, other, `account ${id} is being removed`))) {
-      tell($, `Claude account ${id} is in use and no other account can take over yet; not removed.`)
-      return
-    }
-  }
-  await $.process.run(['claude', 'auth', 'logout'], { env: slotEnv(account.slot), timeoutMs: 20_000 })
-  await saveAccounts($, view.accounts.filter(a => a.id !== id))
-  if (view.chromeAccountId === id) await setChromeAccount($, undefined)
-  await noteChromeAccount($, id, false)
-  await $.store.delete(`reading:${id}`)
-  await $.store.delete(`health:${id}`)
-  await $.store.delete(`holder:${id}`)
-  await setView($, v => {
-    const readings = { ...v.readings }
-    const health = { ...v.health }
-    const holders = { ...v.holders }
-    delete readings[id]
-    delete health[id]
-    delete holders[id]
-    return { ...v, readings, health, holders, removing: undefined }
-  })
-}
-
 // ---------------------------------------------------------------- wiring
 
 /** The footer's one press: opens the pane, or closes it while it shows. */
@@ -952,31 +788,41 @@ function togglePane($: Host): Promise<unknown> {
 /** After a /login, which signs in the login this session is on: who it is now, and a move off it when that is another login's account. */
 async function checkActive($: Host): Promise<void> {
   const view = await getView($)
-  const active = view.accounts.find(a => a.id === view.activeId)
-  if (active !== undefined) await checkAccount($, active)
+  await act($, 'POST', `/accounts/${view.activeId}/check`, { fresh: true })
   await maybeRotate($)
 }
 
 /** Rotate now: moves to the login the pane's Rotation setting picks, as the rotation would once this one runs low; with it off, the most room. */
 async function rotate($: Host): Promise<void> {
   const view = await getView($)
-  const target = pickTarget(view, await $.clock.now())
+  const target = pickTarget({ ...view, accounts: view.accounts.filter(a => !view.retiring?.includes(a.id)) }, await $.clock.now())
   if (target === undefined) tell($, 'No other Claude account can take over right now.')
   else await switchTo($, target, 'you pressed Rotate now')
+}
+
+async function removeAccount($: Host, id: string): Promise<void> {
+  await setView($, v => ({ ...v, removing: undefined }))
+  try {
+    await act($, 'POST', `/accounts/${id}/remove`)
+  } catch (error) {
+    if (error instanceof CoordinatorError) tell($, error.message)
+    else throw error
+  }
+  await maybeRotate($)
 }
 
 /** Every press starts its work in the background: a sign-in outlives the press. */
 function actions($: Host): Actions {
   const background = (work: Promise<unknown>) => {
-    work.catch(error => tell($, `Something went wrong: ${String(error)}`))
+    work.catch(error => tell($, `Something went wrong: ${error instanceof Error ? error.message : String(error)}`))
   }
   return {
     togglePane: () => background(togglePane($)),
     rotate: () => background(rotate($)),
-    signInAll: () => background(signInAll($)),
-    signInOne: id => background(signInOne($, id)),
-    cancelSignIn: () => background(Promise.resolve(running?.return({ code: null, signal: 'SIGTERM' }))),
-    add: () => background(addAccount($)),
+    signInAll: () => background(act($, 'POST', '/signin', {})),
+    signInOne: id => background(act($, 'POST', '/signin', { accountId: id })),
+    cancelSignIn: () => background(act($, 'POST', '/signin/cancel')),
+    add: () => background(act($, 'POST', '/accounts')),
     use: id =>
       background(
         getView($).then(view => {
@@ -986,50 +832,53 @@ function actions($: Host): Actions {
       ),
     askRemove: id => background(setView($, v => ({ ...v, removing: id }))),
     remove: id => background(removeAccount($, id)),
-    setFooter: change => background(setFooter($, change)),
-    setRotateTo: rotateTo => background(setRotateTo($, rotateTo)),
+    setFooter: (change: Partial<FooterStyle>) => background(act($, 'PATCH', '/settings', { footer: change })),
+    setRotateTo: (rotateTo: RotateTo) => background(act($, 'PATCH', '/settings', { rotateTo })),
     tryChromeAccount: id => background(tryChromeAccount($, id)),
     toggleChromeOthers: () => background(setView($, v => ({ ...v, isChromeOthersShown: !v.isChromeOthersShown }))),
     connectChrome: () => background(connectChrome($)),
     setDemo: on => background(setView($, v => ({ ...v, demo: on }))),
+    retryCoordinator: () => background(ensureCoordinator($).then(() => registerSession($))),
   }
 }
 
-/** First run makes the normal login number 1; then: which login this session uses, and Claude in Chrome connected as the extension's account. */
+/** The process this session runs as: the parent of a shell it starts. */
+async function sessionPid($: Host): Promise<number | undefined> {
+  const { exitCode, stdout } = await $.process.run(['/bin/sh', '-c', 'echo $PPID'], { timeoutMs: 5_000 }).catch(() => ({ exitCode: -1, stdout: '' }))
+  const pid = Number(stdout.trim())
+  return exitCode === 0 && Number.isInteger(pid) && pid > 1 ? pid : undefined
+}
+
+/** Joins the coordinator (starting it where none runs), then follows it; Claude in Chrome connects as the extension's account first. */
 async function boot($: Host, isInteractive: boolean): Promise<void> {
   // Terminal.app is the terminal that names itself so and draws block characters from its font.
   const hasFontBlocks = (await $.env.get('TERM_PROGRAM')) === 'Apple_Terminal'
-  await setView($, v => ({ ...v, hasFontBlocks }))
-  let accounts = await loadAccounts($)
-  if (accounts.length === 0) {
-    accounts = [{ id: '1', slot: '' }]
-    await saveAccounts($, accounts)
-  }
-  const slot = (await $.env.get('CLAUDE_SECURESTORAGE_CONFIG_DIR')) ?? ''
-  let active = accounts.find(a => a.slot === slot)
-  if (active === undefined) {
-    // Started on a slot nobody registered (set by hand, or by another tool): adopt it.
-    active = { id: freeId(accounts), slot }
-    accounts = [...accounts, active]
-    await saveAccounts($, accounts)
-  }
-  const activeId = active.id
   const sessionId = await $.session.id().catch(() => undefined)
-  await mergeStore($)
-  await setView($, v => ({ ...v, activeId, ...(sessionId === undefined ? {} : { sessionId }) }))
+  await setView($, v => ({ ...v, hasFontBlocks, ...(sessionId === undefined ? {} : { sessionId }) }))
+  // A session started with its own CLAUDE_CONFIG_DIR reads its login there, unless the mod moved it.
+  const slot = (await $.env.get('CLAUDE_SECURESTORAGE_CONFIG_DIR')) ?? ''
+  const pid = await sessionPid($)
+  const cwd = await $.session.cwd().catch(() => undefined)
+  session = {
+    key: `${sessionId ?? 'session'}:${pid ?? Math.random().toString(36).slice(2)}`,
+    slot,
+    isInteractive,
+    ...(pid === undefined ? {} : { pid }),
+    ...(cwd === undefined ? {} : { cwd }),
+  }
+  try {
+    await ensureCoordinator($)
+    await registerSession($)
+  } catch (error) {
+    await setView($, v => ({ ...v, coordinator: { error: error instanceof Error ? error.message : String(error) } }))
+  }
   await checkSwitching($, slot)
   // First, while the session can still move: the rotation waits for it.
   if (isInteractive && shouldConnectAtOpen(await getView($))) {
     void connectChrome($, true).catch(error => debug($, `Chrome connect failed: ${String(error)}`))
   }
-  // A live sign-in names its login as it checks; one whose token has run out, from what `claude auth login` left in its folder.
-  await checkAll($)
-  for (const account of (await loadAccounts($)).filter(a => a.email === undefined || a.orgId === undefined)) {
-    const who = await signedInAs($, account.slot)
-    if (who === undefined) continue
-    const latest = await loadAccounts($)
-    await saveAccounts($, latest.map(a => (a.id === account.id ? { ...a, ...who } : a)))
-  }
+  await maybeRotate($)
+  void watch($).catch(error => debug($, `stopped following the coordinator: ${String(error)}`))
 }
 
 export const register: Register = on => {
@@ -1039,17 +888,19 @@ export const register: Register = on => {
     void $.ui.panes().then(panes => {
       isPaneShown = panes.some(p => p.id === PANE && p.isShown)
     })
+    // A switch settles, and a window resets, with no change at the coordinator to say so.
     $.clock.every(60_000, () => {
-      void mergeStore($)
-        .then(() => settlePending($, false))
+      void settlePending($, false)
         .then(() => maybeRotate($))
         .catch(error => debug($, `sync failed: ${String(error)}`))
     })
-    $.clock.every(10 * 60_000, () => {
-      void checkAll($).catch(error => debug($, `check failed: ${String(error)}`))
-    })
     return started
   })
+
+  on('session.end', async ($, e, next) => {
+    if (session !== undefined) void api($, 'DELETE', `/sessions/${encodeURIComponent(session.key)}`).catch(() => undefined)
+    return next(e)
+  }).catch(($, e, next) => next(e))
 
   on('session.measure', async ($, e, next) => {
     if (e.changed.includes('rateLimits')) {
@@ -1092,7 +943,6 @@ export const register: Register = on => {
     if (e.id === PANE) isPaneShown = false
     return next(e)
   })
-
 
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
     const view = await getView($)

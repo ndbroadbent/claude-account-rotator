@@ -2,7 +2,20 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine, MockClock } from 'claude-code/testing'
 import type { On, ProcessRunResult, SessionRateLimit, ToolCallArgs } from 'claude-code'
 
-import { DEFAULT_FOOTER, keychainItem, roomColor } from './model'
+import { Coordinator } from '../coordinator/core'
+import type { Deps, Persisted } from '../coordinator/core'
+import { VERSION } from '../coordinator/version'
+import {
+  DEFAULT_FOOTER,
+  credentialFrom,
+  credentialsFile,
+  footerStyleFrom,
+  identityFromStatus,
+  keychainItem,
+  roomColor,
+  rotateToFrom,
+  slotEnv,
+} from './model'
 
 const NOW = Date.parse('2026-10-12T10:00:00Z')
 const HOUR = 3600_000
@@ -11,16 +24,21 @@ const SLOT2 = `${HOME}/.claude/accounts/2`
 /** Where Claude Code keeps logins 1 and 2 on Linux. */
 const FILE1 = `${HOME}/.claude/.credentials.json`
 const FILE2 = `${SLOT2}/.credentials.json`
+/** The process the session runs as, as its shell's $PPID says. */
+const PID = 4242
 
 type World = {
-  /** The machine: macOS has a file of its own a Linux machine lacks */
+  /** The machine the coordinator runs on: macOS reads the keychain, Linux the credentials files. */
   system: 'macOS' | 'Linux'
   /** keychain item name -> stored JSON */
   keychain: Record<string, string>
   /** credentials file -> stored text, or null where it cannot be read */
   files: Record<string, string | null>
-  /** access token -> [5-hour %, week %, or null where the plan reports no weekly limit] */
-  usage: Record<string, [number, number | null]>
+  /**
+   * access token -> [5-hour %, or null as since November 2026, when Claude dropped it; week %, or null where the plan
+   * reports no weekly limit; when the week resets, where not the default]
+   */
+  usage: Record<string, [number | null, number | null, string?]>
   /** access token -> the email of the account it signs in, as the profile endpoint answers */
   owners: Record<string, string>
   /** The token a /login signs in, where the session reads its sign-in, and its plan. */
@@ -29,7 +47,10 @@ type World = {
   /** slot -> signed-in email */
   emails: Record<string, string>
   envSets: { name: string; value?: string }[]
+  /** The browser sign-ins the coordinator ran: `claude auth login`'s argv and the env pointing it at a slot. */
   spawned: { argv: readonly string[]; env?: Record<string, string> }[]
+  /** What a browser sign-in does in the browser: saves the login to the slot. */
+  onSignIn?: (slot: string) => void
   submitted: string[]
   /** What the session's last response reported, as `$.session.usage()` answers it. */
   limits: SessionRateLimit[]
@@ -50,6 +71,8 @@ type World = {
   chromeAsked: string[]
   /** The slash commands the mod ran, as typed. */
   commands: string[]
+  /** The coordinator the session reaches over its socket: one process, in memory. */
+  coordinator?: Coordinator
 }
 
 /** Claude Code's words for a browser call that found no browser, as a session moved off its login gets them. */
@@ -77,11 +100,117 @@ const ran = (exitCode: number, stdout: string): ProcessRunResult => ({
   isStderrTruncated: false,
 })
 
-/** Everything beneath the plugin: keychain or credentials files, `claude auth`, the usage API, the UI sinks. */
+/** What the store held before the coordinator, as the coordinator keeps it. */
+function persisted(store: Record<string, unknown>): Persisted {
+  const chromeId = store['chrome-account']
+  const miss = store['chrome-miss']
+  return {
+    accounts: (store.accounts ?? []) as Persisted['accounts'],
+    readings: {},
+    health: {},
+    holders: {},
+    settings: { rotateTo: rotateToFrom(store['rotate-to']), footer: footerStyleFrom(store.footer) },
+    chrome: {
+      ...(typeof chromeId === 'string' ? { accountId: chromeId } : {}),
+      accountIds: (store['chrome-accounts'] ?? []) as string[],
+      ...(typeof miss === 'string' ? { miss } : {}),
+    },
+  }
+}
+
+/**
+ * The coordinator, run in memory on the test's clock, over the same world: the
+ * keychain or credentials files, the usage and profile endpoints, `claude auth`.
+ */
+function coordinatorIn(w: World, clock: MockClock, store: Record<string, unknown>): Coordinator {
+  const after = (ms: number, fn: () => void) => {
+    let isCancelled = false
+    void clock.sleep(ms).then(() => {
+      if (!isCancelled) fn()
+    })
+    return () => {
+      isCancelled = true
+    }
+  }
+  const every = (ms: number, fn: () => void) => {
+    let isCancelled = false
+    const loop = () =>
+      void clock.sleep(ms).then(() => {
+        if (isCancelled) return
+        fn()
+        loop()
+      })
+    loop()
+    return () => {
+      isCancelled = true
+    }
+  }
+  const deps: Deps = {
+    now: () => clock.now(),
+    after,
+    every,
+    async readStored(slot) {
+      if (w.system === 'macOS') {
+        const stored = w.keychain[await keychainItem(slot)]
+        return stored === undefined ? { state: 'absent' } : { state: 'present', credential: credentialFrom(stored) }
+      }
+      // A file that cannot be read holds no login, as Claude Code counts it.
+      const file = credentialsFile(slot, HOME)
+      const text = file === undefined ? undefined : w.files[file]
+      return text === undefined || text === null ? { state: 'absent' } : { state: 'present', credential: credentialFrom(text) }
+    },
+    async fetchUsage(token) {
+      const usage = w.usage[token]
+      if (usage === undefined) return { kind: 'rejected' }
+      const [five, week, weekResetsAt = '2026-10-18T03:00:00Z'] = usage
+      return {
+        kind: 'ok',
+        body: {
+          five_hour: five === null ? null : { utilization: five, resets_at: '2026-10-12T12:00:00Z' },
+          seven_day: week === null ? null : { utilization: week, resets_at: weekResetsAt },
+        },
+      }
+    },
+    async fetchProfile(token) {
+      const email = w.owners[token]
+      if (email === undefined) return undefined
+      return {
+        account: { uuid: `account-${email}`, email },
+        organization: { uuid: `org-${email}`, name: 'Org', organization_type: 'claude_max' },
+      }
+    },
+    async authStatus(slot) {
+      const email = w.emails[slot]
+      const status = email ? { loggedIn: true, email, orgId: `org-${email}`, orgName: 'Org', subscriptionType: 'max' } : { loggedIn: false }
+      return identityFromStatus(JSON.stringify(status))
+    },
+    signIn(slot, email) {
+      w.spawned.push({ argv: ['claude', 'auth', 'login', '--claudeai', ...(email ? ['--email', email] : [])], env: slotEnv(slot) })
+      const done = clock.sleep(0).then(() => {
+        w.onSignIn?.(slot)
+        return { code: w.onSignIn === undefined ? 1 : 0, errors: '' }
+      })
+      return { done, cancel: () => undefined }
+    },
+    async signOut() {},
+    async makeSlot(id) {
+      return `${HOME}/.claude/accounts/${id}`
+    },
+    isAlive: () => true,
+    save: () => undefined,
+    log: () => undefined,
+  }
+  const coordinator = new Coordinator(deps, { version: VERSION, pid: 1, startedAt: NOW, isManaged: false }, persisted(store))
+  void coordinator.start()
+  return coordinator
+}
+
+/** Everything beneath the plugin: the coordinator over its socket, the session's environment, Claude in Chrome, the UI sinks. */
 function world(on: On, w: World, store: Record<string, unknown>): MockClock {
   const clock = mock.clock(on, { now: NOW })
-  mock.store(on, store)
   mock.env(on, { USER: 'tester', HOME, ...w.env })
+  const coordinator = coordinatorIn(w, clock, store)
+  w.coordinator = coordinator
   let slot = w.env.CLAUDE_SECURESTORAGE_CONFIG_DIR ?? ''
   on('env.set', (_$, e) => {
     if (w.refuseEnv) return { deny: `env (managed): ${e.name} is not for plugins outside policy to change` }
@@ -92,37 +221,15 @@ function world(on: On, w: World, store: Record<string, unknown>): MockClock {
     return { value: {} }
   })
   on('process.run', (_$, e) => {
-    const [cmd, sub, verb] = e.argv
-    if (cmd === 'security') {
-      const stored = w.keychain[e.argv[e.argv.length - 1] ?? '']
-      return { value: stored === undefined ? ran(44, '') : ran(0, stored) }
-    }
-    if (cmd === 'claude' && sub === 'auth' && verb === 'status') {
-      const email = w.emails[e.init?.env?.CLAUDE_SECURESTORAGE_CONFIG_DIR ?? '']
-      const status = email ? { loggedIn: true, email, orgId: `org-${email}`, orgName: 'Org', subscriptionType: 'max' } : { loggedIn: false }
-      return { value: ran(0, JSON.stringify(status)) }
-    }
+    if (e.argv[0] === '/bin/sh') return { value: ran(0, `${PID}\n`) }
     throw new Error(`unexpected command: ${e.argv.join(' ')}`)
   })
-  on('http.fetch', (_$, e) => {
-    const token = (e.init?.headers?.Authorization ?? '').replace('Bearer ', '')
-    if (e.url === 'https://api.anthropic.com/api/oauth/profile') {
-      const email = w.owners[token]
-      if (email === undefined) return { value: { status: 404, ok: false, headers: {}, text: '' } }
-      const profile = {
-        account: { uuid: `account-${email}`, email },
-        organization: { uuid: `org-${email}`, name: 'Org', organization_type: 'claude_max' },
-      }
-      return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify(profile) } }
-    }
-    const usage = w.usage[token]
-    if (usage === undefined) return { value: { status: 401, ok: false, headers: {}, text: '' } }
-    const [five, week] = usage
-    const body = {
-      five_hour: { utilization: five, resets_at: '2026-10-12T12:00:00Z' },
-      seven_day: week === null ? null : { utilization: week, resets_at: '2026-10-18T03:00:00Z' },
-    }
-    return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify(body) } }
+  on('http.fetch', async (_$, e) => {
+    if (e.init?.socketPath !== `${HOME}/.claude/account-rotator/coordinator.sock`) throw new Error(`unexpected fetch: ${e.url}`)
+    const url = new URL(e.url)
+    const body = e.init.body === undefined ? undefined : JSON.parse(String(e.init.body))
+    const answer = await coordinator.handle({ method: e.init.method ?? 'GET', path: url.pathname, query: Object.fromEntries(url.searchParams), body })
+    return { value: { status: answer.status, ok: answer.status < 300, headers: {}, text: JSON.stringify(answer.body) } }
   })
   // Claude Code keeps a /login's sign-in where the session reads its own: the slot it is on.
   on('command.run', { command: 'login' }, async () => {
@@ -174,13 +281,6 @@ function world(on: On, w: World, store: Record<string, unknown>): MockClock {
   on('ui.close', (_$, e) => {
     w.panes = w.panes.filter(id => id !== e.id)
     return { value: undefined }
-  })
-  on('fs.write', () => ({ value: undefined }))
-  on('fs.exists', (_$, e) => ({ value: e.path === '/System/Library/CoreServices/SystemVersion.plist' && w.system === 'macOS' }))
-  on('fs.read', (_$, e) => {
-    const text = w.files[e.path]
-    if (text === null) return { deny: `EACCES: permission denied, open '${e.path}'` }
-    return text === undefined ? { deny: `ENOENT: no such file or directory, open '${e.path}'` } : { value: text }
   })
   return clock
 }
@@ -320,13 +420,10 @@ test('on Linux the band\'s Sign in reads the new login from the file the browser
   w.files[FILE1] = blob('tok-1')
   w.usage['tok-1'] = [20, 30]
   const clock = world(on, w, TWO_LOGINS)
-  on('process.spawn', async function* (_$, e) {
-    w.spawned.push(e)
-    yield { stream: 'stdout' as const, text: 'Opening browser to sign in…\n' }
+  w.onSignIn = () => {
     w.files[FILE2] = blob('tok-2')
     w.usage['tok-2'] = [5, 12]
-    return { value: { code: 0, signal: null } }
-  })
+  }
   await start($, clock)
   const footer = await $.ui.mount({ plugin: 'account-rotator', surface: 'terminal', component: 'SessionMode', props: { modes: [] } })
   expect((await footer.find(GLYPHS))?.text).toBe('│⣷│⚠   80% \n│▆│    70% ')
@@ -369,13 +466,10 @@ test('the band\'s Sign in signs a locked login in through the browser, in its ow
   w.usage['tok-1'] = [20, 30]
   const item2 = await keychainItem(SLOT2)
   const clock = world(on, w, TWO_LOGINS)
-  on('process.spawn', async function* (_$, e) {
-    w.spawned.push(e)
-    yield { stream: 'stdout' as const, text: 'Opening browser to sign in…\n' }
+  w.onSignIn = () => {
     w.keychain[item2] = blob('tok-2')
     w.usage['tok-2'] = [5, 12]
-    return { value: { code: 0, signal: null } }
-  })
+  }
   await start($, clock)
   const footer = await $.ui.mount({ plugin: 'account-rotator', surface: 'terminal', component: 'SessionMode', props: { modes: ['auto mode'] } })
   expect((await footer.find(GLYPHS))?.text).toBe('│⣷│⚠   80% \n│▆│    70% ')
@@ -634,7 +728,7 @@ test('with next in list picked, Rotate now moves to the login after the one in u
   const clock = world(on, w, three)
   await start($, clock)
   const pane = await $.ui.mount({ plugin: 'account-rotator', surface: 'terminal', component: 'Pane', requestId: 'claude-accounts', props: PANE_PROPS })
-  expect(await pane.find({ text: /moves to the account whose 5-hour window resets soonest/ })).toBeDefined()
+  expect(await pane.find({ text: /moves to the account whose usage resets soonest/ })).toBeDefined()
   await pane.press({ key: 'rotate-to-order' })
   await clock.settle()
   await pane.redraw()
@@ -1416,4 +1510,73 @@ test('a session without Claude in Chrome is asked once, and its pane has no Chro
   expect(await pane.find({ key: 'chrome-row-1' })).toBeUndefined()
   expect(await pane.find({ text: /Chrome/ })).toBeUndefined()
   await pane.unmount()
+})
+
+// As of November 2026 Claude has no 5-hour limit: the usage endpoint and responses report the week alone.
+
+test('with only a weekly limit, the footer shows one row, the week, with its sign-in mark, and the pane only weeks', async ($, on) => {
+  const w = fresh()
+  w.keychain['Claude Code-credentials'] = blob('tok-1')
+  w.usage['tok-1'] = [null, 30]
+  const clock = world(on, w, TWO_LOGINS)
+  await start($, clock)
+  const footer = await $.ui.mount({ plugin: 'account-rotator', surface: 'terminal', component: 'SessionMode', props: { modes: [] } })
+  expect((await footer.find(GLYPHS))?.text).toBe('│▆│⚠   70% ')
+  await footer.unmount()
+  const pane = await $.ui.mount({ plugin: 'account-rotator', surface: 'terminal', component: 'Pane', requestId: 'claude-accounts', props: PANE_PROPS })
+  expect(await pane.find({ text: /^Once the account in use has 2% of its week left, moves to the account whose usage resets soonest\.$/ })).toBeDefined()
+  expect(await pane.find({ text: '5h' })).toBeUndefined()
+  expect(await pane.find({ text: 'week' })).toBeDefined()
+  expect(await pane.find({ key: 'footer-session' })).toBeUndefined()
+  await pane.unmount()
+})
+
+test('with only a weekly limit, the session moves once the week reaches 98%, to the account whose week resets soonest', async ($, on) => {
+  const w = fresh()
+  const slot = (id: number) => `${HOME}/.claude/accounts/${id}`
+  w.keychain['Claude Code-credentials'] = blob('tok-1')
+  w.keychain[await keychainItem(slot(2))] = blob('tok-2')
+  w.keychain[await keychainItem(slot(3))] = blob('tok-3')
+  w.usage['tok-1'] = [null, 99]
+  // Account 2 has more room, but account 3's week resets first: use its room before it refills.
+  w.usage['tok-2'] = [null, 10, '2026-10-18T03:00:00Z']
+  w.usage['tok-3'] = [null, 40, '2026-10-13T03:00:00Z']
+  const accounts = [1, 2, 3].map(id => ({ id: String(id), slot: id === 1 ? '' : slot(id), email: `${id}@example.com` }))
+  const clock = world(on, w, { accounts })
+  await start($, clock)
+  expect(w.envSets).toEqual([{ name: 'CLAUDE_SECURESTORAGE_CONFIG_DIR', value: slot(3) }])
+  expect(w.toasts.filter(t => /^Switched to Claude account 3 .*: account 1 has 1% of its week left\.$/.test(t))).toHaveLength(1)
+})
+
+test('with only a weekly limit, most room picks the account with the most of its week left', async ($, on) => {
+  const w = fresh()
+  const slot = (id: number) => `${HOME}/.claude/accounts/${id}`
+  w.keychain['Claude Code-credentials'] = blob('tok-1')
+  w.keychain[await keychainItem(slot(2))] = blob('tok-2')
+  w.keychain[await keychainItem(slot(3))] = blob('tok-3')
+  w.usage['tok-1'] = [null, 99]
+  w.usage['tok-2'] = [null, 10, '2026-10-18T03:00:00Z']
+  w.usage['tok-3'] = [null, 40, '2026-10-13T03:00:00Z']
+  const accounts = [1, 2, 3].map(id => ({ id: String(id), slot: id === 1 ? '' : slot(id), email: `${id}@example.com` }))
+  const clock = world(on, w, { accounts, 'rotate-to': 'room' })
+  await start($, clock)
+  expect(w.envSets).toEqual([{ name: 'CLAUDE_SECURESTORAGE_CONFIG_DIR', value: slot(2) }])
+})
+
+test('with only a weekly limit, a turn that dies on the usage limit counts the week full and moves on', async ($, on) => {
+  const w = fresh()
+  w.keychain['Claude Code-credentials'] = blob('tok-1')
+  w.keychain[await keychainItem(SLOT2)] = blob('tok-2')
+  w.usage['tok-1'] = [null, 80]
+  w.usage['tok-2'] = [null, 30]
+  const clock = world(on, w, TWO_LOGINS)
+  await start($, clock)
+  expect(w.envSets).toEqual([])
+  // The limit was hit before the usage endpoint shows it.
+  await $.classic.StopFailure({ error: 'rate_limit' })
+  await clock.settle()
+  expect(w.envSets).toEqual([{ name: 'CLAUDE_SECURESTORAGE_CONFIG_DIR', value: SLOT2 }])
+  expect(w.coordinator?.state().accounts.find(a => a.id === '1')?.reading?.sevenDay?.pct).toBe(100)
+  await clock.advance(36_000)
+  expect(w.submitted).toHaveLength(1)
 })

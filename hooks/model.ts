@@ -1,9 +1,9 @@
-import type { Account, Fill, FooterStyle, Glyphs, Health, Highlight, Reading, RotateTo, UsageWindow, View } from '../types'
+import type { Account, CombinedWindow, Fill, FooterStyle, Glyphs, Health, Highlight, Reading, RotateTo, UsageWindow, View } from '../types'
 
 /** Leave a login once its 5-hour window is this full (percent). */
 export const LEAVE_FIVE_HOUR = 90
 /** Leave a login once its weekly window is this full (percent). */
-export const LEAVE_SEVEN_DAY = 95
+export const LEAVE_SEVEN_DAY = 98
 /** Warn this long before a login's refresh token runs out. */
 export const SIGN_IN_WARN_MS = 3 * 24 * 3600_000
 
@@ -74,35 +74,69 @@ export function isSpent(r: Reading | undefined, now: number): boolean {
 }
 
 export function shouldLeave(view: View, now: number): boolean {
-  return view.health[view.activeId]?.kind === 'login-needed' || isSpent(view.readings[view.activeId], now)
+  return (
+    view.health[view.activeId]?.kind === 'login-needed' ||
+    view.retiring?.includes(view.activeId) === true ||
+    isSpent(view.readings[view.activeId], now)
+  )
 }
 
-/** When a login's 5-hour window resets, epoch ms; Infinity while none is running. */
-function fiveHourReset(r: Reading | undefined, now: number): number {
-  const w = r?.fiveHour
+/**
+ * The window that limits a login: its 5-hour window where its plan reports
+ * one, else its week. As of November 2026 Claude has no 5-hour limit, so
+ * this is the week; a plan that reports one again gets it back.
+ */
+export function limitingWindow(r: Reading | undefined): 'fiveHour' | 'sevenDay' {
+  return r?.fiveHour !== undefined ? 'fiveHour' : 'sevenDay'
+}
+
+/** Whether any login reports a 5-hour window: without one, the footer, pane and menu bar show only the week. */
+export function hasFiveHour(readings: Readonly<Record<string, Reading>>): boolean {
+  return Object.values(readings).some(r => r.fiveHour !== undefined)
+}
+
+/** The room a login has to rotate to: what it can serve right now, or its week's room where it reports no 5-hour window. */
+function roomOf(r: Reading | undefined, now: number): number | undefined {
+  return availableNow(r, now) ?? roomLeft(r?.sevenDay, now)
+}
+
+/** When the window that limits a login resets, epoch ms; Infinity while none is running. */
+function limitReset(r: Reading | undefined, now: number): number {
+  const w = r?.[limitingWindow(r)]
   if (w?.resetsAt === undefined || (windowPct(w, now) ?? 0) === 0) return Infinity
   return Date.parse(w.resetsAt)
+}
+
+/** A login's reading once a turn hit its usage limit before its usage showed it: the window that limits it, full. */
+export function spentReading(r: Reading | undefined, now: number): Reading {
+  const key = limitingWindow(r)
+  const resetsAt = r?.[key]?.resetsAt
+  return { ...r, [key]: { pct: 100, ...(resetsAt ? { resetsAt } : {}) }, at: now }
 }
 
 /**
  * The signed-in login below both thresholds to move to, as `rotateTo` picks:
  * the one that can serve the most right now (unread counts as fresh); the one
- * whose 5-hour window resets soonest, so room about to refill is used first,
+ * whose limit (its 5-hour window, or its week) resets soonest, so room about to refill is used first,
  * the most room breaking ties; or the next in the list after the one in use.
  * With the rotation off, Rotate now takes the one with the most room.
  */
 export function pickTarget(view: View, now: number): Account | undefined {
   const ready = view.accounts.filter(
-    a => a.id !== view.activeId && view.health[a.id]?.kind === 'ok' && !isSpent(view.readings[a.id], now),
+    a =>
+      a.id !== view.activeId &&
+      view.health[a.id]?.kind === 'ok' &&
+      view.retiring?.includes(a.id) !== true &&
+      !isSpent(view.readings[a.id], now),
   )
-  const available = (a: Account) => availableNow(view.readings[a.id], now) ?? 100
+  const available = (a: Account) => roomOf(view.readings[a.id], now) ?? 100
   const byRoom = (a: Account, b: Account) => available(b) - available(a)
   switch (view.rotateTo) {
     case 'room':
     case 'off':
       return ready.sort(byRoom)[0]
     case 'reset': {
-      const reset = (a: Account) => fiveHourReset(view.readings[a.id], now)
+      const reset = (a: Account) => limitReset(view.readings[a.id], now)
       return ready.sort((a, b) => (reset(a) === reset(b) ? byRoom(a, b) : reset(a) < reset(b) ? -1 : 1))[0]
     }
     case 'order': {
@@ -374,7 +408,7 @@ export function blockedAdvice(isNormalLogin: boolean): string {
 export function blockedText(isNormalLogin: boolean): string {
   return (
     `Can't switch accounts in this session. ${blockedAdvice(isNormalLogin)} ` +
-    'More: https://github.com/ivokund/claude-account-rotator#team-and-enterprise-accounts'
+    'More: https://github.com/ndbroadbent/claude-account-rotator#team-and-enterprise-accounts'
   )
 }
 
@@ -478,7 +512,7 @@ export function freeId(accounts: readonly Account[]): string {
   return String(n)
 }
 
-export type Identity = Pick<Account, 'email' | 'orgId' | 'orgName' | 'plan'>
+export type Identity = Pick<Account, 'email' | 'orgId' | 'orgName' | 'plan' | 'tier'>
 
 /** Who a slot is signed in as, from `claude auth status --json`; undefined when signed out. */
 export function identityFromStatus(stdout: string): Identity | undefined {
@@ -517,12 +551,18 @@ export function isLoginOf(a: Identity, who: Identity): boolean {
 export function identityFromProfile(body: unknown): Identity | undefined {
   const field = (value: unknown, key: string) => (typeof value === 'object' && value !== null ? (value as Record<string, unknown>)[key] : undefined)
   const { account, organization } = (typeof body === 'object' && body !== null ? body : {}) as Record<string, unknown>
-  const [email, orgId, orgName] = [field(account, 'email'), field(organization, 'uuid'), field(organization, 'name')]
+  const [email, orgId, orgName, tier] = [
+    field(account, 'email'),
+    field(organization, 'uuid'),
+    field(organization, 'name'),
+    field(organization, 'rate_limit_tier'),
+  ]
   if (typeof email !== 'string' || email === '') return undefined
   return {
     email,
     ...(typeof orgId === 'string' ? { orgId } : {}),
     ...(typeof orgName === 'string' ? { orgName } : {}),
+    ...(typeof tier === 'string' && tier !== '' ? { tier } : {}),
   }
 }
 
@@ -545,3 +585,57 @@ export function planText(plan: string): string {
   }
 }
 
+
+/**
+ * A plan's size, so the combined usage counts a Max 20x login twenty times a
+ * Pro one: from the organization's rate-limit tier where the profile told it
+ * (`default_claude_max_20x`), else 1.
+ */
+export function weightOf(account: Pick<Account, 'tier'>): number {
+  const match = /max_(\d+)x/.exec(account.tier ?? '')
+  const multiple = match === null ? 1 : Number(match[1])
+  return Number.isFinite(multiple) && multiple > 0 ? multiple : 1
+}
+
+type Weighed = { id: string; tier?: string }
+
+/**
+ * Usage across logins, one window at a time: the plan-weighted mean of what
+ * each login has used, counting only logins signed in and read. A window past
+ * its reset counts as empty. With its soonest reset still to come.
+ */
+export function combinedUsage(
+  accounts: readonly Weighed[],
+  readings: Record<string, Reading>,
+  health: Record<string, Health>,
+  now: number,
+): { fiveHour?: CombinedWindow; sevenDay?: CombinedWindow } {
+  const combine = (pick: (r: Reading) => UsageWindow | undefined): CombinedWindow | undefined => {
+    let total = 0
+    let weights = 0
+    let counted = 0
+    let soonest: number | undefined
+    for (const a of accounts) {
+      if (health[a.id]?.kind === 'login-needed') continue
+      const r = readings[a.id]
+      const w = r === undefined ? undefined : pick(r)
+      const pct = windowPct(w, now)
+      if (w === undefined || pct === undefined) continue
+      const weight = weightOf(a)
+      total += weight * pct
+      weights += weight
+      counted += 1
+      const reset = w.resetsAt === undefined ? NaN : Date.parse(w.resetsAt)
+      if (Number.isFinite(reset) && reset > now && (soonest === undefined || reset < soonest)) soonest = reset
+    }
+    if (counted === 0) return undefined
+    return {
+      pct: Math.round((total / weights) * 10) / 10,
+      accounts: counted,
+      ...(soonest === undefined ? {} : { nextResetAt: new Date(soonest).toISOString() }),
+    }
+  }
+  const fiveHour = combine(r => r.fiveHour)
+  const sevenDay = combine(r => r.sevenDay)
+  return { ...(fiveHour ? { fiveHour } : {}), ...(sevenDay ? { sevenDay } : {}) }
+}
