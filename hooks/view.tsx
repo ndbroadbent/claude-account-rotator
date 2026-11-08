@@ -194,20 +194,17 @@ const ROW_NAMES = ['Session:', 'Weekly:'] as const
  */
 export function Footer(ui: Ui, view: View, modes: readonly string[], now: number, act: Actions) {
   const { Box, Text, Button } = ui
-  const { session, week, sessionPercent, weekPercent } = view.footer
+  const { week, weekPercent } = view.footer
+  // One row: the week. As of November 2026 only the $100 Max plan has a 5-hour window, which its row in the pane
+  // shows; the 5-hour row stands in only where no login reports a week (a plan with no weekly limit).
   const hasWeek = view.accounts.some((a, i) => rooms(view, a, i, now)[1] !== undefined)
-  // As of November 2026 no plan reports a 5-hour window, so the footer shows only the week.
-  const hasSession = view.accounts.some((a, i) => rooms(view, a, i, now)[0] !== undefined)
-  const sessionGlyphs = session !== 'none' && hasSession
-  const weekGlyphs = week !== 'none' && hasWeek
-  const hasColumns = sessionGlyphs || weekGlyphs
-  const weekShown = weekGlyphs || (weekPercent && activeRoom(view, now, 1) !== undefined)
-  const sessionShown = sessionGlyphs || (sessionPercent && activeRoom(view, now, 0) !== undefined)
-  const shownRows = [...(sessionShown ? [0 as const] : []), ...(weekShown ? [1 as const] : [])]
-  const rows = shownRows.map((row, k) =>
-    row === 0
-      ? footerRow(view, now, 0, session, sessionPercent, hasColumns, k === 0)
-      : footerRow(view, now, 1, week, weekPercent, hasColumns, k === 0),
+  const row: 0 | 1 = hasWeek ? 1 : 0
+  const hasRoom = view.accounts.some((a, i) => rooms(view, a, i, now)[row] !== undefined)
+  const hasColumns = (row === 1 ? week : view.footer.session) !== 'none' && hasRoom
+  const isShown = hasColumns || ((row === 1 ? weekPercent : view.footer.sessionPercent) && activeRoom(view, now, row) !== undefined)
+  const shownRows = isShown ? [row] : []
+  const rows = shownRows.map(r =>
+    r === 1 ? footerRow(view, now, 1, week, weekPercent, hasColumns, true) : footerRow(view, now, 0, view.footer.session, view.footer.sessionPercent, hasColumns, true),
   )
   return (
     <Box flexDirection="row" columnGap={1}>
@@ -325,18 +322,14 @@ function section(ui: Ui, key: string, title: string, children: RenderChildren) {
 /** The footer's settings: a style and a percent per row, what glyphs fill with, how the login in use stands out, and a demo preview. */
 function FooterSettings(ui: Ui, view: View, act: Actions) {
   const { Box, Text } = ui
-  // The session row's settings only while a login reports a 5-hour window.
-  const hasSession = hasFiveHour(view.readings)
   return section(ui, 'display', 'Display', [
-    hasSession && choice(ui, 'footer-session', 'Session', GLYPH_CHOICES, view.footer.session, session => act.setFooter({ session })),
-    choice(ui, 'footer-week', 'Week', GLYPH_CHOICES, view.footer.week, week => act.setFooter({ week })),
+    choice(ui, 'footer-week', 'Glyphs', GLYPH_CHOICES, view.footer.week, week => act.setFooter({ week })),
     <Box key="footer-percent" flexDirection="row">
       <Box width={NAME_WIDTH} flexShrink={0}>
         <Text dimColor>Percent</Text>
       </Box>
       <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
-        {hasSession && toggle(ui, 'footer-percent-session', 'session', view.footer.sessionPercent, on => act.setFooter({ sessionPercent: on }))}
-        {toggle(ui, 'footer-percent-week', 'week', view.footer.weekPercent, on => act.setFooter({ weekPercent: on }))}
+        {toggle(ui, 'footer-percent-week', 'shown', view.footer.weekPercent, on => act.setFooter({ weekPercent: on }))}
       </Box>
     </Box>,
     choice(ui, 'footer-fill', 'Show', FILL_CHOICES, view.footer.fill, fill => act.setFooter({ fill })),

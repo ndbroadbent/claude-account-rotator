@@ -587,14 +587,15 @@ export function planText(plan: string): string {
 
 
 /**
- * A plan's size, so the combined usage counts a Max 20x login twenty times a
- * Pro one: from the organization's rate-limit tier where the profile told it
- * (`default_claude_max_20x`), else 1.
+ * How much weekly usage a login's plan has, in Pros, as claude.com/pricing puts it (November 2026): Ultra
+ * (formerly Max 20x, still `default_claude_max_20x` in its rate limit tier) 10, Max (formerly Max 5x) 5, anything
+ * else 1. The combined usage weighs each login by it.
  */
 export function weightOf(account: Pick<Account, 'tier'>): number {
-  const match = /max_(\d+)x/.exec(account.tier ?? '')
-  const multiple = match === null ? 1 : Number(match[1])
-  return Number.isFinite(multiple) && multiple > 0 ? multiple : 1
+  const tier = account.tier ?? ''
+  if (/max_20x|ultra/.test(tier)) return 10
+  if (/max_5x/.test(tier)) return 5
+  return 1
 }
 
 type Weighed = { id: string; tier?: string }

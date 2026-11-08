@@ -126,8 +126,9 @@ test('reads who a token signs in from the profile endpoint body: its email and o
   expect(identityFromProfile(null)).toBeUndefined()
 })
 
-test('a login counts toward the combined usage by its plan\'s size: Max 20x four times Max 5x, anything else as one', () => {
-  expect(weightOf({ tier: 'default_claude_max_20x' })).toBe(20)
+test('a login counts toward the combined usage by its plan\'s weekly usage: Ultra (Max 20x) twice Max (5x), anything else as one', () => {
+  expect(weightOf({ tier: 'default_claude_max_20x' })).toBe(10)
+  expect(weightOf({ tier: 'default_claude_ultra' })).toBe(10)
   expect(weightOf({ tier: 'default_claude_max_5x' })).toBe(5)
   expect(weightOf({ tier: 'default_raven' })).toBe(1)
   expect(weightOf({})).toBe(1)

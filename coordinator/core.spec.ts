@@ -270,12 +270,13 @@ describe('combined usage', () => {
     const persisted = threeLogins(w)
     w.tiers = { t3: 'default_claude_max_5x' }
     const c = await started(w, persisted)
-    assert.equal(account(c, '1').weight, 20)
+    // Ultra (formerly Max 20x) gives 10x Pro's week, Max 5x gives 5x: an Ultra login counts twice a Max one.
+    assert.equal(account(c, '1').weight, 10)
     assert.equal(account(c, '3').weight, 5)
-    // (20*20 + 20*40 + 5*60) / 45
-    assert.equal(c.state().combined.fiveHour?.pct, Math.round(((20 * 20 + 20 * 40 + 5 * 60) / 45) * 10) / 10)
+    // (10*20 + 10*40 + 5*60) / 25
+    assert.equal(c.state().combined.fiveHour?.pct, Math.round(((10 * 20 + 10 * 40 + 5 * 60) / 25) * 10) / 10)
     c.rejected('2')
-    assert.equal(c.state().combined.fiveHour?.pct, Math.round(((20 * 20 + 5 * 60) / 25) * 10) / 10)
+    assert.equal(c.state().combined.fiveHour?.pct, Math.round(((10 * 20 + 5 * 60) / 15) * 10) / 10)
     assert.equal(c.state().combined.fiveHour?.accounts, 2)
     assert.equal(c.state().combined.fiveHour?.nextResetAt, '2026-11-09T12:00:00.000Z')
   })

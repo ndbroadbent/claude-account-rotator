@@ -2,6 +2,11 @@
 
 What each version of the account rotator changed. To get each one as Claude Code starts, turn on auto-update: in `/plugin`, open **Marketplaces**, pick **claude-account-rotator** and choose **Enable auto-update**. To update by hand, run `claude plugin marketplace update claude-account-rotator`, then `claude plugin update account-rotator@claude-account-rotator`, and start a new session.
 
+## 0.4.3 - 2026-11-09
+
+- **The combined usage weighs plans by their weekly size.** Ultra (formerly Max 20x) gives 10x Pro's week and Max gives 5x, so an Ultra account now counts twice a Max one, where it counted four times.
+- **The footer shows only the week.** The 5-hour row is gone, and so are its settings in **Display**: the one account with a 5-hour window (the $100 Max plan) shows it on its row in the panel.
+
 ## 0.4.2 - 2026-11-09
 
 - **A 5-hour window shows only on the account that has one.** As of November 2026 only the $100 Max plan keeps a 5-hour limit; Ultra (formerly Max 20x) dropped it. The menu bar shows the combined week alone, and the panel in Claude Code and the menu bar app show a 5-hour bar only on that account's row. The menu bar app's choice of windows is gone.

@@ -362,17 +362,17 @@ test('moves to the login with room once the active one passes 90% of its 5-hour 
   await start($, clock)
   expect(w.envSets).toEqual([{ name: 'CLAUDE_SECURESTORAGE_CONFIG_DIR', value: SLOT2 }])
   const footer = await $.ui.mount({ plugin: 'account-rotator', surface: 'terminal', component: 'SessionMode', props: { modes: [] } })
-  // Braille of what each login can serve now over bars of its week: login 1 (8% left now)
-  // on standby, login 2 (90% left) in use, a line down each side of its column, its percents at the right.
+  // Bars of each login's week: login 1 (60% left) on standby, login 2 (70% left) in use, a line
+  // down each side of its column, its percent at the right.
   const button = await footer.find(GLYPHS)
-  expect(button?.text).toBe(' ⣀│⣷│  90% \n ▅│▆│  70% ')
+  expect(button?.text).toBe(' ▅│▆│  70% ')
   // Every glyph in its room's color, the lines in the theme's dim gray.
   const [one, lineBefore, two, lineAfter, percent] = painted(button?.children[0])
-  expect(one).toMatchObject({ color: roomColor(8) })
+  expect(one).toMatchObject({ color: roomColor(60) })
   expect(lineBefore).toMatchObject({ color: 'subtle' })
-  expect(two).toMatchObject({ color: roomColor(90) })
+  expect(two).toMatchObject({ color: roomColor(70) })
   expect(lineAfter).toMatchObject({ color: 'subtle' })
-  expect(percent).toMatchObject({ color: roomColor(90) })
+  expect(percent).toMatchObject({ color: roomColor(70) })
   await footer.unmount()
 })
 
@@ -388,7 +388,7 @@ test('on Linux each login is read from the credentials file in its folder, the n
   await start($, clock)
   expect(w.envSets).toEqual([{ name: 'CLAUDE_SECURESTORAGE_CONFIG_DIR', value: SLOT2 }])
   const footer = await $.ui.mount({ plugin: 'account-rotator', surface: 'terminal', component: 'SessionMode', props: { modes: [] } })
-  expect((await footer.find(GLYPHS))?.text).toBe(' ⣀│⣷│  90% \n ▅│▆│  70% ')
+  expect((await footer.find(GLYPHS))?.text).toBe(' ▅│▆│  70% ')
   await footer.unmount()
 })
 
@@ -428,7 +428,7 @@ test('on Linux the band\'s Sign in reads the new login from the file the browser
   }
   await start($, clock)
   const footer = await $.ui.mount({ plugin: 'account-rotator', surface: 'terminal', component: 'SessionMode', props: { modes: [] } })
-  expect((await footer.find(GLYPHS))?.text).toBe('│⣷│⚠   80% \n│▆│    70% ')
+  expect((await footer.find(GLYPHS))?.text).toBe('│▆│⚠   70% ')
   const band = await $.ui.mount({
     plugin: 'account-rotator',
     surface: 'terminal',
@@ -439,7 +439,7 @@ test('on Linux the band\'s Sign in reads the new login from the file the browser
   await clock.settle()
   await band.unmount()
   await footer.redraw()
-  expect((await footer.find(GLYPHS))?.text).toBe('│⣷│⣿   80% \n│▆│▇   70% ')
+  expect((await footer.find(GLYPHS))?.text).toBe('│▆│▇   70% ')
   await footer.unmount()
 })
 
@@ -474,7 +474,7 @@ test('the band\'s Sign in signs a locked login in through the browser, in its ow
   }
   await start($, clock)
   const footer = await $.ui.mount({ plugin: 'account-rotator', surface: 'terminal', component: 'SessionMode', props: { modes: ['auto mode'] } })
-  expect((await footer.find(GLYPHS))?.text).toBe('│⣷│⚠   80% \n│▆│    70% ')
+  expect((await footer.find(GLYPHS))?.text).toBe('│▆│⚠   70% ')
   const band = await $.ui.mount({
     plugin: 'account-rotator',
     surface: 'terminal',
@@ -491,7 +491,7 @@ test('the band\'s Sign in signs a locked login in through the browser, in its ow
     },
   ])
   await footer.redraw()
-  expect((await footer.find(GLYPHS))?.text).toBe('│⣷│⣿   80% \n│▆│▇   70% ')
+  expect((await footer.find(GLYPHS))?.text).toBe('│▆│▇   70% ')
   expect(await footer.find({ text: /auto mode/ })).toBeDefined()
   await footer.unmount()
 })
@@ -677,18 +677,18 @@ test('one press on the footer opens the accounts pane, the next closes it', asyn
   await footer.unmount()
 })
 
-test('under the pointer the footer names its rows and lights its glyphs on a shade, drawn swapped for the inverting control', async ($, on) => {
+test('under the pointer the footer names its row and lights its glyphs on a shade, drawn swapped for the inverting control', async ($, on) => {
   const w = fresh()
   w.keychain['Claude Code-credentials'] = blob('tok-1')
   w.usage['tok-1'] = [20, 30]
   const clock = world(on, w, TWO_LOGINS)
   await start($, clock)
   const footer = await $.ui.mount({ plugin: 'account-rotator', surface: 'terminal', component: 'SessionMode', props: { modes: [] } })
-  expect(await footer.find({ text: 'Session:' })).toBeDefined()
+  expect(await footer.find({ text: 'Session:' })).toBeUndefined()
   expect(await footer.find({ text: 'Weekly:' })).toBeDefined()
   const [line, one] = painted((await footer.find(GLYPHS))?.children[0])
   expect(line).toMatchObject({ color: 'subtle', hover: { color: 'userMessageBackground', backgroundColor: 'inactive' } })
-  expect(one).toMatchObject({ color: roomColor(80), hover: { color: 'userMessageBackground', backgroundColor: roomColor(80, true) } })
+  expect(one).toMatchObject({ color: roomColor(70), hover: { color: 'userMessageBackground', backgroundColor: roomColor(70, true) } })
   await footer.unmount()
 })
 
@@ -773,7 +773,7 @@ test('a login whose plan reports no weekly limit leaves its week blank in the fo
   await start($, clock)
   const footer = await $.ui.mount({ plugin: 'account-rotator', surface: 'terminal', component: 'SessionMode', props: { modes: [] } })
   // Login 1, in use, has no week: blank below its braille, and no week percent at the right.
-  expect((await footer.find(GLYPHS))?.text).toBe('│⣷│⣷   80% \n│ │▆       ')
+  expect((await footer.find(GLYPHS))?.text).toBe('│·│▆       ')
   await footer.unmount()
 })
 
@@ -790,7 +790,7 @@ test('with no weekly limit on any login, the footer leaves the week row out', as
   await footer.unmount()
 })
 
-test('the pane picks each footer row\'s style for every session, and previews it with demo values', async ($, on) => {
+test('the pane picks the footer\'s style for every session, and previews it with demo values', async ($, on) => {
   const w = fresh()
   w.keychain['Claude Code-credentials'] = blob('tok-1')
   w.keychain[await keychainItem(SLOT2)] = blob('tok-2')
@@ -800,35 +800,35 @@ test('the pane picks each footer row\'s style for every session, and previews it
   await start($, clock)
   const pane = await $.ui.mount({ plugin: 'account-rotator', surface: 'terminal', component: 'Pane', requestId: 'claude-accounts', props: PANE_PROPS })
   const footer = await $.ui.mount({ plugin: 'account-rotator', surface: 'terminal', component: 'SessionMode', props: { modes: [] } })
-  expect((await footer.find(GLYPHS))?.text).toBe('│⣷│⣷   80% \n│▆│▆   70% ')
-  await pane.press({ key: 'footer-session-bars' })
+  expect((await footer.find(GLYPHS))?.text).toBe('│▆│▆   70% ')
+  // Only the week has a row now: the pane no longer offers the 5-hour one.
+  expect(await pane.find({ key: 'footer-session-bars' })).toBeUndefined()
   await pane.press({ key: 'footer-week-none' })
   await clock.settle()
   await footer.redraw()
-  // The week's glyphs are off but its percent is still on: the row keeps just that, under the other's.
-  expect((await footer.find(GLYPHS))?.text).toBe('│▇│▇   80% \n│ │    70% ')
-  // Kept in the store every session reads: the next sync from it keeps the picks.
+  // The glyphs are off but the percent is still on: the footer keeps just that.
+  expect((await footer.find(GLYPHS))?.text).toBe('  70% ')
+  // Kept in the store every session reads: the next sync from it keeps the pick.
   await clock.advance(61_000)
   await footer.redraw()
-  expect((await footer.find(GLYPHS))?.text).toBe('│▇│▇   80% \n│ │    70% ')
-  // The demo draws imitated usage (login 1: 85% now, 70% of its week; login 2: 60%, 40%), this session only.
+  expect((await footer.find(GLYPHS))?.text).toBe('  70% ')
+  // The demo draws imitated usage (login 1: 70% of its week left; login 2: 40%), this session only.
   await pane.press({ key: 'footer-preview-demo' })
   await pane.press({ key: 'footer-week-pie' })
   await clock.settle()
   await footer.redraw()
-  expect((await footer.find(GLYPHS))?.text).toBe('│▇│▅   85% \n│◕│◑   70% ')
-  // Each row's percent switches off on its own; a row with no glyphs keeps just its percent.
+  expect((await footer.find(GLYPHS))?.text).toBe('│◕│◑   70% ')
+  // The percent switches off on its own.
   await pane.press({ key: 'footer-percent-week' })
-  await pane.press({ key: 'footer-session-none' })
   await clock.settle()
   await footer.redraw()
-  expect((await footer.find(GLYPHS))?.text).toBe('│ │    85% \n│◕│◑       ')
+  expect((await footer.find(GLYPHS))?.text).toBe('│◕│◑  ')
   // 'tile': the column in use on the theme's dim gray, padded half a cell each side, kept under the pointer.
   await pane.press({ key: 'footer-active-tile' })
   await clock.settle()
   await footer.redraw()
-  expect((await footer.find(GLYPHS))?.text).toBe('▐ ▌    85% \n▐◕▌◑       ')
-  const [padBefore, tiledOne, padAfter, untiled] = painted((await footer.find(GLYPHS))?.children[2])
+  expect((await footer.find(GLYPHS))?.text).toBe('▐◕▌◑  ')
+  const [padBefore, tiledOne, padAfter, untiled] = painted((await footer.find(GLYPHS))?.children[0])
   expect(padBefore).toMatchObject({ color: 'subtle', hover: { color: 'userMessageBackground', backgroundColor: 'subtle' } })
   expect(tiledOne).toMatchObject({ color: roomColor(70), backgroundColor: 'subtle', hover: { color: 'subtle', backgroundColor: roomColor(70, true) } })
   expect(padAfter).toMatchObject({ color: 'subtle' })
@@ -838,8 +838,8 @@ test('the pane picks each footer row\'s style for every session, and previews it
   await pane.press({ key: 'footer-active-dim' })
   await clock.settle()
   await footer.redraw()
-  expect((await footer.find(GLYPHS))?.text).toBe('       85% \n ◕ ◑       ')
-  const [brightOne, dimTwo] = painted((await footer.find(GLYPHS))?.children[2])
+  expect((await footer.find(GLYPHS))?.text).toBe(' ◕ ◑ ')
+  const [brightOne, dimTwo] = painted((await footer.find(GLYPHS))?.children[0])
   expect(brightOne?.dimColor).toBeUndefined()
   expect(dimTwo).toMatchObject({ color: roomColor(40), dimColor: true })
   // Showing what is used fills by it, in the footer and the pane; the colors still follow the room left.
@@ -847,8 +847,8 @@ test('the pane picks each footer row\'s style for every session, and previews it
   await clock.settle()
   await footer.redraw()
   await pane.redraw()
-  expect((await footer.find(GLYPHS))?.text).toBe('       15% \n ◔ ◑       ')
-  const [usedOne, usedTwo] = painted((await footer.find(GLYPHS))?.children[2])
+  expect((await footer.find(GLYPHS))?.text).toBe(' ◔ ◑ ')
+  const [usedOne, usedTwo] = painted((await footer.find(GLYPHS))?.children[0])
   expect(usedOne).toMatchObject({ color: roomColor(70) })
   expect(usedTwo).toMatchObject({ color: roomColor(40) })
   expect(await pane.find({ text: /^▰{2}▱{8} 20% used$/ })).toBeDefined()
@@ -866,12 +866,12 @@ test('in Terminal.app, which draws block characters from its font, the tile pads
   const clock = world(on, w, { ...TWO_LOGINS, footer: { active: 'tile' } })
   await start($, clock)
   const footer = await $.ui.mount({ plugin: 'account-rotator', surface: 'terminal', component: 'SessionMode', props: { modes: [] } })
-  expect((await footer.find(GLYPHS))?.text).toBe(' ⣷ ⣷   80% \n ▆ ▆   70% ')
+  expect((await footer.find(GLYPHS))?.text).toBe(' ▆ ▆   70% ')
   const [padBefore, tiled, padAfter, untiled] = painted((await footer.find(GLYPHS))?.children[0])
   expect(padBefore).toMatchObject({ backgroundColor: 'subtle', hover: { color: 'subtle' } })
-  expect(tiled).toMatchObject({ color: roomColor(80), backgroundColor: 'subtle' })
+  expect(tiled).toMatchObject({ color: roomColor(70), backgroundColor: 'subtle' })
   expect(padAfter).toMatchObject({ backgroundColor: 'subtle', hover: { color: 'subtle' } })
-  expect(untiled).toMatchObject({ color: roomColor(90) })
+  expect(untiled).toMatchObject({ color: roomColor(70) })
   expect(untiled?.backgroundColor).toBeUndefined()
   await footer.unmount()
 })
