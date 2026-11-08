@@ -1,12 +1,6 @@
 import Foundation
 
 extension CoordinatorState {
-  /// Whether any login reports a 5-hour window. As of November 2026 Claude has no 5-hour limit, so none does, and the
-  /// title and panel show only the week; a plan that reports one again brings it back.
-  public var hasFiveHour: Bool {
-    accounts.contains { $0.reading?.fiveHour != nil }
-  }
-
   /// The combined percent used of a window across every login, weighted by plan size.
   ///
   /// It is `combined` as the coordinator sent it, until its `nextResetAt` passes: from then on one login's window has

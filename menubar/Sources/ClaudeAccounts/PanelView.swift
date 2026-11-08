@@ -61,13 +61,10 @@ struct PanelView: View {
     }
   }
 
-  /// "week 61% used", or "5-hour 38% · week 61% used" where a login reports a 5-hour window
+  /// "week 61% used": the combined week. A 5-hour window shows only on the row of a login that has one.
   private func combinedSummary(_ state: CoordinatorState) -> String {
     let week = TitleFormatter.percentText(state.combinedUsedPct(.sevenDay, at: store.now), display: display)
-    let word = display == .used ? "used" : "left"
-    guard state.hasFiveHour else { return "week \(week) \(word)" }
-    let fiveHour = TitleFormatter.percentText(state.combinedUsedPct(.fiveHour, at: store.now), display: display)
-    return "5-hour \(fiveHour) · week \(week) \(word)"
+    return "week \(week) \(display == .used ? "used" : "left")"
   }
 
   // MARK: - Accounts
@@ -186,7 +183,7 @@ struct PanelView: View {
 
   // MARK: - Display settings
 
-  /// Percents as used or left, and the windows the menu bar shows, as a menu of checkmarked choices.
+  /// Percents as used or left, as a menu of checkmarked choices.
   private var displayMenu: some View {
     Menu {
       Picker("Percents", selection: $settings.display) {
@@ -194,22 +191,13 @@ struct PanelView: View {
         Text("Show left").tag(UsageDisplay.left)
       }
       .pickerStyle(.inline)
-      // Only while a login reports a 5-hour window: without one the menu bar shows the week alone.
-      if store.state?.hasFiveHour == true {
-        Picker("Menu bar", selection: $settings.titleWindows) {
-          Text("5-hour and week").tag(TitleWindows.both)
-          Text("5-hour only").tag(TitleWindows.fiveHour)
-          Text("Week only").tag(TitleWindows.week)
-        }
-        .pickerStyle(.inline)
-      }
     } label: {
       Image(systemName: "gearshape")
     }
     .menuStyle(.borderlessButton)
     .menuIndicator(.hidden)
     .fixedSize()
-    .help("Display: percents used or left, and what the menu bar shows")
+    .help("Display: percents used or left")
   }
 
   // MARK: - Footer

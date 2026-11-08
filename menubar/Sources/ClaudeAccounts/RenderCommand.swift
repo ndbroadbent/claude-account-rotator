@@ -21,7 +21,6 @@ enum RenderCommand {
     var statePath: String?
     var isDark = false
     var display = UsageDisplay.used
-    var windows = TitleWindows.both
   }
 
   struct RenderError: Error, CustomStringConvertible {
@@ -72,12 +71,6 @@ enum RenderCommand {
           throw RenderError(description: "--display is used or left, not \"\(raw)\"")
         }
         options.display = display
-      case "--windows":
-        let raw = try value(flag)
-        guard let windows = TitleWindows(rawValue: raw) else {
-          throw RenderError(description: "--windows is both, fiveHour or week, not \"\(raw)\"")
-        }
-        options.windows = windows
       default:
         throw RenderError(description: "unknown argument \"\(flag)\"")
       }
@@ -121,23 +114,19 @@ enum RenderCommand {
 
     // The title in each of its looks, drawn by the same code as the menu bar's.
     let now = store.now
-    func title(_ display: UsageDisplay, _ windows: TitleWindows, reachable: Bool = true) -> NSImage {
+    func title(_ display: UsageDisplay, reachable: Bool = true) -> NSImage {
       let model = TitleFormatter.make(
-        state: store.state, isReachable: reachable && store.connection.isReachable, now: now, display: display,
-        windows: windows)
+        state: store.state, isReachable: reachable && store.connection.isReachable, now: now, display: display)
       return TitleImage.image(for: model, scale: 2)
     }
     let titles: [RenderSheet.TitleSample] = [
-      .init(caption: "Menu bar (\(options.display.rawValue), \(options.windows.title.lowercased()))",
-            image: title(options.display, options.windows)),
-      .init(caption: "Left, both", image: title(.left, .both)),
-      .init(caption: "5-hour only", image: title(options.display, .fiveHour)),
-      .init(caption: "Week only", image: title(options.display, .week)),
-      .init(caption: "Unreachable", image: title(options.display, options.windows, reachable: false)),
+      .init(caption: "Menu bar (\(options.display.rawValue))", image: title(options.display)),
+      .init(caption: "Left", image: title(.left)),
+      .init(caption: "Unreachable", image: title(options.display, reachable: false)),
     ]
 
     // The settings come from the arguments and stay in memory: the user's own defaults are neither read nor written.
-    let settings = DisplaySettings(display: options.display, titleWindows: options.windows)
+    let settings = DisplaySettings(display: options.display)
     let sheet = RenderSheet(titles: titles, store: store, settings: settings, isDark: options.isDark)
       .environment(\.colorScheme, options.isDark ? .dark : .light)
     let png = try snapshot(sheet, appearance: appearance)

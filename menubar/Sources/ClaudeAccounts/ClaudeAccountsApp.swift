@@ -39,8 +39,7 @@ struct MenuBarTitle: View {
       state: store.state,
       isReachable: store.connection.isReachable,
       now: store.now,
-      display: settings.display,
-      windows: settings.titleWindows
+      display: settings.display
     )
     Image(nsImage: TitleImage.image(for: model))
       .accessibilityLabel(model.accessibilityLabel)

@@ -13,23 +13,8 @@ struct TitleLabel: View {
           .font(.system(size: 11, weight: .semibold))
           .padding(.trailing, 1)
       }
-      ForEach(Array(model.parts.enumerated()), id: \.offset) { index, part in
-        if index > 0 {
-          Text("·")
-            .font(.system(size: 13, weight: .bold))
-            .opacity(0.5)
-        }
-        HStack(alignment: .firstTextBaseline, spacing: 1.5) {
-          // A tiny label only when one window shows: with both, the order (5-hour, week) says which is which.
-          if model.parts.count == 1 && !part.label.isEmpty {
-            Text(part.label)
-              .font(.system(size: 9, weight: .semibold))
-              .opacity(0.6)
-          }
-          Text(part.value)
-            .font(.system(size: 13).monospacedDigit())
-        }
-      }
+      Text(model.text)
+        .font(.system(size: 13).monospacedDigit())
     }
     .foregroundStyle(Color.black)
     .opacity(model.dimmed ? 0.35 : 1)

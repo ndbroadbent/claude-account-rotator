@@ -1582,3 +1582,19 @@ test('with only a weekly limit, a turn that dies on the usage limit counts the w
   await clock.advance(36_000)
   expect(w.submitted).toHaveLength(1)
 })
+
+test('a 5-hour window shows only on the row of the login whose plan has one', async ($, on) => {
+  const w = fresh()
+  w.keychain['Claude Code-credentials'] = blob('tok-1')
+  w.keychain[await keychainItem(SLOT2)] = blob('tok-2')
+  w.usage['tok-1'] = [null, 30]
+  // Login 2 is on the $100 Max plan, which keeps a 5-hour window.
+  w.usage['tok-2'] = [20, 10]
+  const clock = world(on, w, TWO_LOGINS)
+  await start($, clock)
+  const pane = await $.ui.mount({ plugin: 'account-rotator', surface: 'terminal', component: 'Pane', requestId: 'claude-accounts', props: PANE_PROPS })
+  const texts = async (text: string) => (await pane.findAll({ text })).filter(e => e.type === 'Text')
+  expect(await texts('5h')).toHaveLength(1)
+  expect(await pane.find({ text: / none reported$/ })).toBeUndefined()
+  await pane.unmount()
+})

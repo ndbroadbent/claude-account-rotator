@@ -662,7 +662,8 @@ function accountRows(ui: Ui, view: View, a: Account, now: number, act: Actions) 
           {lineEnd(ui, view, a, act)}
         </Box>
       </Box>
-      {hasFiveHour(view.readings) && windowRow(ui, view.footer.fill, isActive, '5h', r !== undefined, r?.fiveHour, now)}
+      {/* Only a login whose plan has a 5-hour window (as of November 2026, the $100 Max plan) shows one. */}
+      {r?.fiveHour !== undefined && windowRow(ui, view.footer.fill, isActive, '5h', true, r.fiveHour, now)}
       {windowRow(ui, view.footer.fill, isActive, 'week', r !== undefined, r?.sevenDay, now)}
       {expiry !== undefined && expiry - now < SIGN_IN_WARN_MS && (
         <Text color="warning">   sign-in runs out {untilText(expiry, now)}; signing in again renews it</Text>

@@ -18,44 +18,18 @@ public enum UsageDisplay: String, CaseIterable, Sendable {
   }
 }
 
-/// Which windows the menu bar title shows.
-public enum TitleWindows: String, CaseIterable, Sendable {
-  case both, fiveHour, week
-
-  public var title: String {
-    switch self {
-    case .both: "Both"
-    case .fiveHour: "5-hour"
-    case .week: "Week"
-    }
-  }
-}
-
 public enum UserDefaultsKeys {
   public static let display = "usageDisplay"
-  public static let titleWindows = "titleWindows"
 }
 
-/// What the menu bar title shows.
+/// What the menu bar title shows: the combined week across every login. A 5-hour window (as of November 2026 only the
+/// $100 Max plan has one) shows on its own login's row in the panel, never here.
 public struct TitleModel: Equatable, Sendable {
-  public struct Part: Equatable, Sendable {
-    /// "5h" or "wk"
-    public var label: String
-    /// "38%", or "–" without a figure
-    public var value: String
-
-    public init(label: String, value: String) {
-      self.label = label
-      self.value = value
-    }
-  }
-
-  public var parts: [Part]
   /// An account needs signing in.
   public var warning: Bool
   /// The coordinator can't be reached.
   public var dimmed: Bool
-  /// "38% · 61%"
+  /// "61%", or "–" without a figure
   public var text: String
   public var accessibilityLabel: String
 }
@@ -63,59 +37,30 @@ public struct TitleModel: Equatable, Sendable {
 public enum TitleFormatter {
   public static let placeholder = "–"
 
-  public static func make(
-    state: CoordinatorState?, isReachable: Bool, now: Date, display: UsageDisplay, windows: TitleWindows
-  ) -> TitleModel {
+  public static func make(state: CoordinatorState?, isReachable: Bool, now: Date, display: UsageDisplay) -> TitleModel {
     guard isReachable, let state else {
-      // The shape the last state had; none yet, the week alone, as Claude's limits are now.
-      return make(
-        fiveHourUsed: nil, weekUsed: nil, warning: false, isReachable: false, display: display, windows: windows,
-        hasFiveHour: state?.hasFiveHour ?? false)
+      return make(weekUsed: nil, warning: false, isReachable: false, display: display)
     }
     return make(
-      fiveHourUsed: state.combinedUsedPct(.fiveHour, at: now),
-      weekUsed: state.combinedUsedPct(.sevenDay, at: now),
-      warning: state.hasLoginNeeded,
-      isReachable: true,
-      display: display,
-      windows: windows,
-      hasFiveHour: state.hasFiveHour
-    )
+      weekUsed: state.combinedUsedPct(.sevenDay, at: now), warning: state.hasLoginNeeded, isReachable: true,
+      display: display)
   }
 
-  /// Without a 5-hour window on any login, the title is the week alone, unlabelled: it is the only limit.
-  public static func make(
-    fiveHourUsed: Double?, weekUsed: Double?, warning: Bool, isReachable: Bool, display: UsageDisplay,
-    windows: TitleWindows, hasFiveHour: Bool = true
-  ) -> TitleModel {
-    let windows = hasFiveHour ? windows : .week
-    // Without the coordinator the figures are stale: show none.
-    let fiveHourUsed = isReachable ? fiveHourUsed : nil
+  public static func make(weekUsed: Double?, warning: Bool, isReachable: Bool, display: UsageDisplay) -> TitleModel {
+    // Without the coordinator the figure is stale: show none.
     let weekUsed = isReachable ? weekUsed : nil
-    var parts: [TitleModel.Part] = []
-    var spoken: [String] = []
     let word = display == .used ? "used" : "left"
-    if windows != .week {
-      parts.append(.init(label: "5h", value: percentText(fiveHourUsed, display: display)))
-      spoken.append("5-hour \(spokenPercent(fiveHourUsed, display: display, word: word))")
-    }
-    if windows != .fiveHour {
-      parts.append(.init(label: hasFiveHour ? "wk" : "", value: percentText(weekUsed, display: display)))
-      spoken.append("week \(spokenPercent(weekUsed, display: display, word: word))")
-    }
-    let text = parts.map(\.value).joined(separator: " · ")
     var accessibility: String
     if isReachable {
-      accessibility = "Claude usage: " + spoken.joined(separator: ", ")
+      accessibility = "Claude usage: week \(spokenPercent(weekUsed, display: display, word: word))"
       if warning { accessibility += ". An account needs signing in" }
     } else {
       accessibility = "Claude usage: the coordinator isn't running"
     }
     return TitleModel(
-      parts: parts,
       warning: isReachable && warning,
       dimmed: !isReachable,
-      text: text,
+      text: percentText(weekUsed, display: display),
       accessibilityLabel: accessibility
     )
   }

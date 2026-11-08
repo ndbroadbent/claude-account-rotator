@@ -47,8 +47,9 @@ struct AccountRow: View {
         }
       }
       VStack(spacing: 5) {
-        if state.hasFiveHour {
-          UsageLine(title: "5-hour", window: account.reading?.fiveHour, now: now, display: display)
+        // Only a login whose plan has a 5-hour window (as of November 2026, the $100 Max plan) shows one.
+        if let fiveHour = account.reading?.fiveHour {
+          UsageLine(title: "5-hour", window: fiveHour, now: now, display: display)
         }
         UsageLine(title: "Week", window: account.reading?.sevenDay, now: now, display: display)
       }

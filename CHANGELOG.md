@@ -2,6 +2,10 @@
 
 What each version of the account rotator changed. To get each one as Claude Code starts, turn on auto-update: in `/plugin`, open **Marketplaces**, pick **claude-account-rotator** and choose **Enable auto-update**. To update by hand, run `claude plugin marketplace update claude-account-rotator`, then `claude plugin update account-rotator@claude-account-rotator`, and start a new session.
 
+## 0.4.2 - 2026-11-09
+
+- **A 5-hour window shows only on the account that has one.** As of November 2026 only the $100 Max plan keeps a 5-hour limit; Ultra (formerly Max 20x) dropped it. The menu bar shows the combined week alone, and the panel in Claude Code and the menu bar app show a 5-hour bar only on that account's row. The menu bar app's choice of windows is gone.
+
 ## 0.4.1 - 2026-11-09
 
 - **Fixes "Can't reach the account coordinator"** in every session that stayed quiet for 30 seconds. A session's wait for the coordinator's changes asked for 50 seconds, past the 30 seconds Claude Code gives a plugin's request before it gives up. It now asks for 25.

@@ -4,70 +4,49 @@ import Testing
 
 @Suite struct TitleTests {
   private func title(
-    _ fiveHour: Double?, _ week: Double?, warning: Bool = false, reachable: Bool = true,
-    display: UsageDisplay = .used, windows: TitleWindows = .both
+    _ week: Double?, warning: Bool = false, reachable: Bool = true, display: UsageDisplay = .used
   ) -> TitleModel {
-    TitleFormatter.make(
-      fiveHourUsed: fiveHour, weekUsed: week, warning: warning, isReachable: reachable, display: display,
-      windows: windows)
+    TitleFormatter.make(weekUsed: week, warning: warning, isReachable: reachable, display: display)
   }
 
-  @Test func bothWindowsUsed() {
-    let model = title(38.4, 61.5)
-    #expect(model.text == "38% · 62%")
-    #expect(model.parts.map(\.label) == ["5h", "wk"])
+  @Test func weekUsed() {
+    let model = title(61.5)
+    #expect(model.text == "62%")
     #expect(!model.warning)
     #expect(!model.dimmed)
-    #expect(model.accessibilityLabel == "Claude usage: 5-hour 38 percent used, week 62 percent used")
+    #expect(model.accessibilityLabel == "Claude usage: week 62 percent used")
   }
 
   @Test func left() {
-    #expect(title(38, 61, display: .left).text == "62% · 39%")
-  }
-
-  @Test func oneWindow() {
-    #expect(title(38, 61, windows: .fiveHour).parts == [.init(label: "5h", value: "38%")])
-    #expect(title(38, 61, windows: .week).text == "61%")
+    #expect(title(61, display: .left).text == "39%")
   }
 
   @Test func clampsAndPlaceholders() {
-    #expect(title(130, -4).text == "100% · 0%")
-    #expect(title(nil, 20).text == "– · 20%")
+    #expect(title(130).text == "100%")
+    #expect(title(-4).text == "0%")
+    #expect(title(nil).text == "–")
   }
 
   @Test func warningWhenALoginNeedsSigningIn() {
-    #expect(title(10, 20, warning: true).warning)
+    #expect(title(20, warning: true).warning)
   }
 
   @Test func unreachableIsDimmedWithoutFigures() {
-    let model = title(38, 61, warning: true, reachable: false)
+    let model = title(61, warning: true, reachable: false)
     #expect(model.dimmed)
     #expect(!model.warning)
-    #expect(model.text == "– · –")
+    #expect(model.text == "–")
   }
 
-  @Test func fromStateUsesCombined() throws {
+  @Test func fromStateIsTheCombinedWeekEvenWithAFiveHourWindow() throws {
+    // three-accounts has 5-hour windows: the title leaves them to their logins' rows.
     let state = try loadFixture("three-accounts")
     let now = try #require(state.now)
-    let model = TitleFormatter.make(state: state, isReachable: true, now: now, display: .used, windows: .both)
-    #expect(model.text == "78% · 60%")
+    let model = TitleFormatter.make(state: state, isReachable: true, now: now, display: .used)
+    #expect(model.text == "60%")
     #expect(model.warning)
-    let unreachable = TitleFormatter.make(state: state, isReachable: false, now: now, display: .used, windows: .both)
-    #expect(unreachable.dimmed)
-  }
-
-  @Test func weekAloneWithoutAFiveHourWindow() throws {
-    // As of November 2026 Claude has no 5-hour limit: the title is the week, unlabelled, whatever was picked.
-    let state = try loadFixture("week-only")
-    let now = try #require(state.now)
-    #expect(!state.hasFiveHour)
-    for windows in TitleWindows.allCases {
-      let model = TitleFormatter.make(state: state, isReachable: true, now: now, display: .used, windows: windows)
-      #expect(model.parts == [.init(label: "", value: "70%")])
-      #expect(model.accessibilityLabel.hasPrefix("Claude usage: week 70 percent used"))
-    }
-    #expect(try loadFixture("three-accounts").hasFiveHour)
-    #expect(TitleFormatter.make(state: nil, isReachable: false, now: now, display: .used, windows: .both).text == "–")
+    #expect(TitleFormatter.make(state: state, isReachable: false, now: now, display: .used).dimmed)
+    #expect(TitleFormatter.make(state: try loadFixture("week-only"), isReachable: true, now: now, display: .used).text == "70%")
   }
 
   @Test func combinedIsWorkedOutOnceItsResetPasses() throws {
