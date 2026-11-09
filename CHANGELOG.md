@@ -2,6 +2,10 @@
 
 What each version of the account rotator changed. To get each one as Claude Code starts, turn on auto-update: in `/plugin`, open **Marketplaces**, pick **claude-account-rotator** and choose **Enable auto-update**. To update by hand, run `claude plugin marketplace update claude-account-rotator`, then `claude plugin update account-rotator@claude-account-rotator`, and start a new session.
 
+## 0.5.1 - 2026-11-09
+
+- **A session that connects Claude in Chrome as it opens goes straight to the account whose week resets soonest** once connected, where it used to go back to the account it started on (Claude Code's own login) first, and move on only a response or two later. A confirmed switch also lets the rotation look again at once.
+
 ## 0.5.0 - 2026-11-09
 
 - **Soonest reset now uses the week that resets first, all the time.** Every session moves to the account whose week resets soonest and still has room, at start-up and whenever that changes (an account fills or resets), where before a session moved only once its own account was spent. A session starts on Claude Code's own login, so after a restart they all used to stay there while other accounts' weeks reset unused. Usage going up never moves a session, and another account must reset over an hour sooner. **Most room**, **next in list** and **disabled** work as before.

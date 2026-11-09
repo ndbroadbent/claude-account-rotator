@@ -488,6 +488,8 @@ async function onMeasure($: Host, limits: readonly SessionRateLimit[]): Promise<
   const view = await getView($)
   if (view.pending !== undefined) {
     await settlePending($, true)
+    // A switch the response confirmed lets the rotation look again now, not at the next response.
+    if ((await getView($)).pending === undefined) await maybeRotate($)
     return
   }
   const reading = readingFromLimits(limits, await $.clock.now())
@@ -738,21 +740,31 @@ async function connectingChrome(
 }
 
 /**
- * After Connect's visit: back to the login the session was on, while it can
- * serve, or with the rotation off; else on to the one the coordinator picks.
- * The extension's account's usage is not the session's to spend.
+ * After Connect's visit: where the session would go from the login it was on.
+ * With 'soonest reset', that is the login whose week resets soonest (which can
+ * be the one visited), without a stop back on the login it came from, as a
+ * session opening on Claude Code's login would; else back to that login while
+ * it can serve, or with the rotation off; else on to the one the coordinator
+ * picks. Other than that, the extension's account's usage is not the
+ * session's to spend.
  */
 async function leaveVisit($: Host, from: Account): Promise<void> {
   const now = await $.clock.now()
   const view = await getView($)
+  const fromView = { ...view, activeId: from.id }
   const health = view.health[from.id]?.kind
-  const canServe = health !== 'login-needed' && health !== 'logging-in' && !shouldLeave({ ...view, activeId: from.id }, now)
+  const canServe = health !== 'login-needed' && health !== 'logging-in' && !shouldLeave(fromView, now)
+  const sooner = canServe && view.rotateTo === 'reset' ? targetFor(fromView, now) : undefined
+  if (sooner !== undefined) {
+    if (sooner.id !== view.activeId) await switchTo($, sooner, `its week resets before account ${from.id}'s`)
+    return
+  }
   if (view.rotateTo === 'off' || canServe) {
     await switchTo($, from, 'back from connecting Claude in Chrome', true)
     return
   }
-  const target = targetFor({ ...view, activeId: from.id }, now)
-  if (target !== undefined) await switchTo($, target, whyLeave({ ...view, activeId: from.id }, now))
+  const target = targetFor(fromView, now)
+  if (target !== undefined) await switchTo($, target, whyLeave(fromView, now))
 }
 
 /**

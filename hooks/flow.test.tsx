@@ -1283,6 +1283,47 @@ test('as a session opens it visits the extension\'s account to connect Claude in
   expect((await browse($, 'navigate', { url: 'https://example.com' })).isError).toBeUndefined()
 })
 
+test('as a session opens it connects Claude in Chrome on the extension\'s account, then goes straight to the account whose week resets soonest, not back first', async ($, on) => {
+  const w = fresh()
+  const slot = (id: number) => `${HOME}/.claude/accounts/${id}`
+  w.chrome = { extensions: [slot(3)] }
+  w.keychain['Claude Code-credentials'] = blob('tok-1')
+  w.keychain[await keychainItem(slot(2))] = blob('tok-2')
+  w.keychain[await keychainItem(slot(3))] = blob('tok-3')
+  // Claude Code's login resets last, the extension's account (3) next, account 2 first.
+  w.usage['tok-1'] = [null, 10, '2026-10-18T03:00:00Z']
+  w.usage['tok-2'] = [null, 0, '2026-10-13T03:00:00Z']
+  w.usage['tok-3'] = [null, 0, '2026-10-15T03:00:00Z']
+  const accounts = [1, 2, 3].map(id => ({ id: String(id), slot: id === 1 ? '' : slot(id), email: `${id}@example.com` }))
+  const clock = world(on, w, { accounts, 'chrome-account': '3' })
+  await start($, clock)
+  expect(slots(w)).toEqual([slot(3)])
+  await clock.advance(36_000)
+  expect(w.chromeAsked).toEqual([slot(3)])
+  expect(slots(w)).toEqual([slot(3), slot(2)])
+  expect(w.toasts.filter(t => /^Switched to Claude account 2 .*: its week resets before account 1's\.$/.test(t))).toHaveLength(1)
+  // It stays there: the connection is account 3's, and no response moves it on.
+  await clock.advance(6 * 60_000)
+  expect(slots(w)).toEqual([slot(3), slot(2)])
+  expect((await browse($, 'navigate', { url: 'https://example.com' })).isError).toBeUndefined()
+})
+
+test('as a session opens, a visit to the extension\'s account that resets soonest stays there', async ($, on) => {
+  const w = fresh()
+  w.chrome = { extensions: [SLOT2] }
+  w.keychain['Claude Code-credentials'] = blob('tok-1')
+  w.keychain[await keychainItem(SLOT2)] = blob('tok-2')
+  w.usage['tok-1'] = [null, 10, '2026-10-18T03:00:00Z']
+  w.usage['tok-2'] = [null, 0, '2026-10-13T03:00:00Z']
+  const clock = world(on, w, { ...TWO_LOGINS, 'chrome-account': '2' })
+  await start($, clock)
+  await clock.advance(36_000)
+  expect(w.chromeAsked).toEqual([SLOT2])
+  expect(slots(w)).toEqual([SLOT2])
+  await clock.advance(6 * 60_000)
+  expect(slots(w)).toEqual([SLOT2])
+})
+
 test('a turn that hits the usage limit while the session visits a spent extension account carries on once it is back', async ($, on) => {
   const w = fresh()
   w.chrome = { extensions: [SLOT2] }
