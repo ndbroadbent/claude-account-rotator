@@ -20,6 +20,7 @@ import {
   readingFromLimits,
   sameUsage,
   shouldLeave,
+  soonerTarget,
   spentReading,
   windowPct,
 } from './model'
@@ -337,20 +338,27 @@ function whyLeave(view: View, now: number): string {
     : `account ${view.activeId} has used ${Math.round(used)}% of its ${window}`
 }
 
-/** Where a session that must leave the login it is on goes: the coordinator's pick, else its own without the logins a switch didn't take here. */
+/**
+ * Where a session goes, once it must leave the login it is on or, with
+ * 'soonest reset', once another login's week resets sooner: the coordinator's
+ * pick, else its own without the logins a switch didn't take here.
+ */
 function targetFor(view: View, now: number): Account | undefined {
   const shared = view.moveTo?.[view.activeId]
   if (shared !== undefined && !untaken.has(shared)) return view.accounts.find(a => a.id === shared)
-  return pickTarget({ ...view, accounts: view.accounts.filter(a => !untaken.has(a.id)) }, now)
+  const own = { ...view, accounts: view.accounts.filter(a => !untaken.has(a.id)) }
+  return shouldLeave(view, now) ? pickTarget(own, now) : soonerTarget(own, now)
 }
 
 /** The rotation check under way: the coordinator's changes, a response and a timer can all ask at once, and one switch answers them all. */
 let rotating: Promise<boolean> | undefined
 
 /**
- * Once the active login is spent, locked out or being removed, moves to where
- * the coordinator sends sessions on it; never while the rotation is off,
- * Claude Code's policy refuses it, or Connect holds the session where it is.
+ * Once the active login is spent, locked out or being removed, or with
+ * 'soonest reset' once another login's week resets sooner (at start-up too),
+ * moves to where the coordinator sends sessions on it; never while the
+ * rotation is off, Claude Code's policy refuses it, or Connect holds the
+ * session where it is.
  */
 function maybeRotate($: Host): Promise<boolean> {
   rotating ??= rotateOnce($).finally(() => {
@@ -362,12 +370,15 @@ function maybeRotate($: Host): Promise<boolean> {
 async function rotateOnce($: Host): Promise<boolean> {
   const now = await $.clock.now()
   const view = await getView($)
-  if (view.accounts.length === 0 || isConnectingChrome || view.isSwitchBlocked || view.pending !== undefined || !shouldLeave(view, now)) return false
+  if (view.accounts.length === 0 || isConnectingChrome || view.isSwitchBlocked || view.pending !== undefined) return false
+  const isLeaving = shouldLeave(view, now)
+  if (!isLeaving && view.rotateTo !== 'reset') return false
   const isRetiring = view.retiring?.includes(view.activeId) === true
   if (view.rotateTo === 'off' && !isRetiring) return false
   // With none to move to, the band above the prompt says when the next login frees up.
   const target = targetFor(view, now)
-  return target === undefined ? false : switchTo($, target, whyLeave(view, now))
+  if (target === undefined) return false
+  return switchTo($, target, isLeaving ? whyLeave(view, now) : `its week resets before account ${view.activeId}'s`)
 }
 
 /** The login in use, when its token refreshes too soon for the refresh guard to let the session leave it for `target`. */

@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { RotateTo, View } from '../types'
-import { DEFAULT_FOOTER, availableNow, braille, browsersFrom, chromeNote, credentialFrom, credentialsFile, footerStyleFrom, healthOf, identityFromProfile, isNoBrowser, isPolicyRefusal, keychainItem, pickTarget, pie, readingFromUsage, rotateToFrom, shouldLeave, roomColor, weightOf, windowPct } from './model'
+import { DEFAULT_FOOTER, availableNow, braille, browsersFrom, chromeNote, credentialFrom, credentialsFile, footerStyleFrom, healthOf, identityFromProfile, isNoBrowser, isPolicyRefusal, keychainItem, pickTarget, pie, readingFromUsage, rotateToFrom, shouldLeave, roomColor, soonerTarget, weightOf, windowPct } from './model'
 
 const NOW = Date.parse('2026-10-12T10:00:00Z')
 const LATER = '2026-10-12T12:00:00Z'
@@ -54,21 +54,52 @@ test('ranks logins by what they can serve now: the 5-hour room, nothing once the
   expect(availableNow({ fiveHour: { pct: 97, resetsAt: LATER }, at: NOW }, Date.parse(LATER) + 1)).toBe(100)
 })
 
-test('soonest reset moves to the login whose 5-hour window resets first, never a spent one; one with no window running comes last', () => {
-  const resetsAt = (v: View, id: string, at: string | undefined) => {
+test('soonest reset moves to the login whose week resets first, never a spent one; a week at 0% counts, one whose reset has passed comes last', () => {
+  const weekResets = (v: View, id: string, at: string) => {
     const r = v.readings[id]
-    if (r?.fiveHour) r.fiveHour = { pct: r.fiveHour.pct, ...(at ? { resetsAt: at } : {}) }
+    if (r?.sevenDay) r.sevenDay = { pct: r.sevenDay.pct, resetsAt: at }
   }
-  const v = view({ '1': [95, 50], '2': [10, 10], '3': [60, 10], '4': [91, 10] }, {}, 'reset')
-  resetsAt(v, '2', '2026-10-12T14:00:00Z')
-  resetsAt(v, '3', '2026-10-12T11:00:00Z')
-  resetsAt(v, '4', '2026-10-12T10:30:00Z')
+  // Login 4's week resets first but it is spent; login 3 has less room than 2 but its week resets sooner.
+  const v = view({ '1': [95, 50], '2': [10, 10], '3': [60, 0], '4': [10, 99] }, {}, 'reset')
+  weekResets(v, '2', '2026-10-16T03:00:00Z')
+  weekResets(v, '3', '2026-10-13T03:00:00Z')
+  weekResets(v, '4', '2026-10-12T20:00:00Z')
   expect(pickTarget(v, NOW)?.id).toBe('3')
-  // Login 3's window resets before the switch: no window is running, so it comes last.
-  expect(pickTarget(v, Date.parse('2026-10-12T11:00:00Z') + 1)?.id).toBe('2')
+  // The 5-hour windows, which reset within hours, don't order them: the $100 Max plan would always come first.
+  const r3 = v.readings['3']
+  if (r3?.fiveHour) r3.fiveHour = { pct: 60, resetsAt: '2026-10-12T23:00:00Z' }
+  const r2 = v.readings['2']
+  if (r2?.fiveHour) r2.fiveHour = { pct: 10, resetsAt: '2026-10-12T10:30:00Z' }
+  expect(pickTarget(v, NOW)?.id).toBe('3')
+  // Login 3's week has reset since its reading: no reset to come is known, so it comes last.
+  expect(pickTarget(v, Date.parse('2026-10-13T03:00:00Z') + 1)?.id).toBe('2')
   // Two resets at once: the more room wins.
-  resetsAt(v, '2', '2026-10-12T11:00:00Z')
+  weekResets(v, '2', '2026-10-13T03:00:00Z')
   expect(pickTarget(v, NOW)?.id).toBe('2')
+})
+
+test('with soonest reset, a session with room moves once another login\'s week resets over an hour sooner, and only then', () => {
+  const weekResets = (v: View, id: string, at: string) => {
+    const r = v.readings[id]
+    if (r?.sevenDay) r.sevenDay = { pct: r.sevenDay.pct, resetsAt: at }
+  }
+  const v = view({ '1': [10, 10], '2': [0, 0], '3': [0, 0] }, {}, 'reset')
+  // Every week resets together: nowhere is sooner.
+  expect(soonerTarget(v, NOW)).toBeUndefined()
+  weekResets(v, '2', '2026-10-15T03:00:00Z')
+  weekResets(v, '3', '2026-10-14T03:00:00Z')
+  expect(soonerTarget(v, NOW)?.id).toBe('3')
+  // On login 3 it stays: login 2's week resets later, and login 1's later still.
+  expect(soonerTarget({ ...v, activeId: '3' }, NOW)).toBeUndefined()
+  // Within the hour of the one in use's reset is not sooner enough to move for.
+  weekResets(v, '1', '2026-10-14T03:30:00Z')
+  expect(soonerTarget(v, NOW)).toBeUndefined()
+  weekResets(v, '1', WEEK_END)
+  // A spent login is never the target; a session that must leave goes where pickTarget says, not here.
+  expect(soonerTarget(view({ '1': [10, 10], '2': [0, 99] }, {}, 'reset'), NOW)).toBeUndefined()
+  expect(soonerTarget({ ...v, readings: { ...v.readings, '1': { sevenDay: { pct: 99, resetsAt: WEEK_END }, at: NOW } } }, NOW)).toBeUndefined()
+  // Only 'soonest reset' moves a session that still has room.
+  for (const rotateTo of ['room', 'order', 'off'] as const) expect(soonerTarget({ ...v, rotateTo }, NOW)).toBeUndefined()
 })
 
 test('next in list moves to the login after the one in use, wrapping, past spent and locked ones', () => {

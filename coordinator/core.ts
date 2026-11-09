@@ -39,6 +39,7 @@ import {
   rotateToFrom,
   sameLogin,
   shouldLeave,
+  soonerTarget,
   spentReading,
   weightOf,
 } from '../hooks/model.ts'
@@ -240,10 +241,10 @@ export class Coordinator {
     return this.liveSessions().filter(s => s.accountId === accountId).length
   }
 
-  /** Where sessions on a login go once they must leave it. */
+  /** Where sessions on a login go: once they must leave it, or with 'soonest reset' once another's week resets sooner. */
   moveTo(accountId: string, now = this.deps.now()): string | undefined {
     const view = this.view(accountId)
-    return shouldLeave(view, now) ? pickTarget(view, now)?.id : undefined
+    return shouldLeave(view, now) ? pickTarget(view, now)?.id : soonerTarget(view, now)?.id
   }
 
   state(): SharedState {

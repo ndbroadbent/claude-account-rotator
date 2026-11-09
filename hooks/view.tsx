@@ -682,6 +682,9 @@ function rule(fill: Fill, rotateTo: RotateTo, hasFive: boolean): string {
     : fill === 'left'
       ? `Once the account in use has ${100 - LEAVE_SEVEN_DAY}% of its week left`
       : `Once the account in use has used ${LEAVE_SEVEN_DAY}% of its week`
+  if (rotateTo === 'reset') {
+    return `Every session uses the account whose week resets soonest, so its room is used before it refills. ${when}, moves to the next.`
+  }
   return `${when}, moves to ${RULE_TARGETS[rotateTo]}.`
 }
 

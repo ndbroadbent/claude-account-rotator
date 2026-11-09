@@ -214,7 +214,7 @@ describe('polling', () => {
 })
 
 describe('rotation', () => {
-  test('sessions on a spent login go to the login whose 5-hour window resets soonest; none when all are spent', async () => {
+  test('sessions on a spent login go to the login whose week resets soonest; none when all are spent', async () => {
     const w = new World()
     const c = await started(w, threeLogins(w))
     assert.equal(account(c, '1').moveTo, undefined)
@@ -223,6 +223,22 @@ describe('rotation', () => {
     assert.equal(account(c, '1').moveTo, '2', 'same resets: the most room breaks the tie')
     c.report('2', { fiveHour: { pct: 92 }, at: w.now + 1 })
     c.report('3', { fiveHour: { pct: 99 }, at: w.now + 1 })
+    assert.equal(account(c, '1').moveTo, undefined)
+  })
+
+  test('with soonest reset, sessions on a login with room go to one whose week resets over an hour sooner', async () => {
+    const w = new World()
+    const c = await started(w, threeLogins(w))
+    // Every week resets together.
+    assert.equal(account(c, '1').moveTo, undefined)
+    c.report('2', { sevenDay: { pct: 0, resetsAt: '2026-11-12T03:00:00Z' }, at: w.now + 1 })
+    assert.equal(account(c, '1').moveTo, '2')
+    assert.equal(account(c, '3').moveTo, '2')
+    assert.equal(account(c, '2').moveTo, undefined)
+    // Half an hour sooner than login 2's is not enough to move for.
+    c.report('3', { sevenDay: { pct: 10, resetsAt: '2026-11-12T03:30:00Z' }, at: w.now + 1 })
+    assert.equal(account(c, '3').moveTo, undefined)
+    c.patchSettings({ rotateTo: 'room' })
     assert.equal(account(c, '1').moveTo, undefined)
   })
 

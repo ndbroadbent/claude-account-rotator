@@ -2,6 +2,11 @@
 
 What each version of the account rotator changed. To get each one as Claude Code starts, turn on auto-update: in `/plugin`, open **Marketplaces**, pick **claude-account-rotator** and choose **Enable auto-update**. To update by hand, run `claude plugin marketplace update claude-account-rotator`, then `claude plugin update account-rotator@claude-account-rotator`, and start a new session.
 
+## 0.5.0 - 2026-11-09
+
+- **Soonest reset now uses the week that resets first, all the time.** Every session moves to the account whose week resets soonest and still has room, at start-up and whenever that changes (an account fills or resets), where before a session moved only once its own account was spent. A session starts on Claude Code's own login, so after a restart they all used to stay there while other accounts' weeks reset unused. Usage going up never moves a session, and another account must reset over an hour sooner. **Most room**, **next in list** and **disabled** work as before.
+- **Soonest reset orders accounts by their week**, not the $100 Max plan's 5-hour window, which resets within hours and so always came first. A week at 0% counts: the usage endpoint gives it a reset.
+
 ## 0.4.3 - 2026-11-09
 
 - **The combined usage weighs plans by their weekly size.** Ultra (formerly Max 20x) gives 10x Pro's week and Max gives 5x, so an Ultra account now counts twice a Max one, where it counted four times.

@@ -100,11 +100,34 @@ function roomOf(r: Reading | undefined, now: number): number | undefined {
   return availableNow(r, now) ?? roomLeft(r?.sevenDay, now)
 }
 
-/** When the window that limits a login resets, epoch ms; Infinity while none is running. */
+/**
+ * When a login's week resets, epoch ms (its 5-hour window's where it reports
+ * no week); Infinity with no reset to come. The week is the room that is lost
+ * if it isn't used before it refills: a 5-hour window resets within hours, so
+ * ranking by it would always put the $100 Max plan first. A week at 0% still
+ * counts: the usage endpoint gives it a reset.
+ */
 function limitReset(r: Reading | undefined, now: number): number {
-  const w = r?.[limitingWindow(r)]
-  if (w?.resetsAt === undefined || (windowPct(w, now) ?? 0) === 0) return Infinity
-  return Date.parse(w.resetsAt)
+  const resetsAt = (r?.sevenDay ?? r?.fiveHour)?.resetsAt
+  const at = resetsAt === undefined ? NaN : Date.parse(resetsAt)
+  return Number.isFinite(at) && at > now ? at : Infinity
+}
+
+/** How much sooner another login's week must reset before 'soonest reset' moves a session that still has room. */
+export const SOONER_BY_MS = 60 * 60_000
+
+/**
+ * With 'soonest reset', where a session whose login still has room goes: the
+ * login pickTarget picks, once its week resets at least an hour before the one
+ * in use's, so every session uses the room that refills first. The order
+ * changes only when a login fills or resets, so rising usage never moves one.
+ */
+export function soonerTarget(view: View, now: number): Account | undefined {
+  if (view.rotateTo !== 'reset' || shouldLeave(view, now)) return undefined
+  const target = pickTarget(view, now)
+  if (target === undefined) return undefined
+  const at = limitReset(view.readings[target.id], now)
+  return Number.isFinite(at) && at + SOONER_BY_MS <= limitReset(view.readings[view.activeId], now) ? target : undefined
 }
 
 /** A login's reading once a turn hit its usage limit before its usage showed it: the window that limits it, full. */
@@ -117,7 +140,7 @@ export function spentReading(r: Reading | undefined, now: number): Reading {
 /**
  * The signed-in login below both thresholds to move to, as `rotateTo` picks:
  * the one that can serve the most right now (unread counts as fresh); the one
- * whose limit (its 5-hour window, or its week) resets soonest, so room about to refill is used first,
+ * whose week resets soonest, so room about to refill is used first,
  * the most room breaking ties; or the next in the list after the one in use.
  * With the rotation off, Rotate now takes the one with the most room.
  */

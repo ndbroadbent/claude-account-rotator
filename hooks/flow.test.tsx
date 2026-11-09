@@ -730,7 +730,7 @@ test('with next in list picked, Rotate now moves to the login after the one in u
   const clock = world(on, w, three)
   await start($, clock)
   const pane = await $.ui.mount({ plugin: 'account-rotator', surface: 'terminal', component: 'Pane', requestId: 'claude-accounts', props: PANE_PROPS })
-  expect(await pane.find({ text: /moves to the account whose usage resets soonest/ })).toBeDefined()
+  expect(await pane.find({ text: /^Every session uses the account whose week resets soonest/ })).toBeDefined()
   await pane.press({ key: 'rotate-to-order' })
   await clock.settle()
   await pane.redraw()
@@ -1526,11 +1526,59 @@ test('with only a weekly limit, the footer shows one row, the week, with its sig
   expect((await footer.find(GLYPHS))?.text).toBe('│▆│⚠   70% ')
   await footer.unmount()
   const pane = await $.ui.mount({ plugin: 'account-rotator', surface: 'terminal', component: 'Pane', requestId: 'claude-accounts', props: PANE_PROPS })
-  expect(await pane.find({ text: /^Once the account in use has 2% of its week left, moves to the account whose usage resets soonest\.$/ })).toBeDefined()
+  expect(await pane.find({ text: /^Every session uses the account whose week resets soonest, so its room is used before it refills\. Once the account in use has 2% of its week left, moves to the next\.$/ })).toBeDefined()
   expect(await pane.find({ text: '5h' })).toBeUndefined()
   expect(await pane.find({ text: 'week' })).toBeDefined()
   expect(await pane.find({ key: 'footer-session' })).toBeUndefined()
   await pane.unmount()
+})
+
+test('with soonest reset, a session whose account has room moves at start-up to the one whose week resets sooner, and on once that one fills', async ($, on) => {
+  const w = fresh()
+  const slot = (id: number) => `${HOME}/.claude/accounts/${id}`
+  w.keychain['Claude Code-credentials'] = blob('tok-1')
+  w.keychain[await keychainItem(slot(2))] = blob('tok-2')
+  w.keychain[await keychainItem(slot(3))] = blob('tok-3')
+  // Claude Code's own login, where every session starts, resets last: its room keeps; the others' would be lost.
+  w.usage['tok-1'] = [null, 10, '2026-10-18T03:00:00Z']
+  w.usage['tok-2'] = [null, 0, '2026-10-13T03:00:00Z']
+  w.usage['tok-3'] = [null, 0, '2026-10-15T03:00:00Z']
+  const accounts = [1, 2, 3].map(id => ({ id: String(id), slot: id === 1 ? '' : slot(id), email: `${id}@example.com` }))
+  const clock = world(on, w, { accounts })
+  await start($, clock)
+  expect(w.envSets).toEqual([{ name: 'CLAUDE_SECURESTORAGE_CONFIG_DIR', value: slot(2) }])
+  expect(w.toasts.filter(t => /^Switched to Claude account 2 .*: its week resets before account 1's\.$/.test(t))).toHaveLength(1)
+  // Its usage rising, as the session's responses report it, moves nothing; once it fills, the session goes on
+  // to account 3, the next to reset.
+  const respond = async (percentUsed: number) => {
+    w.usage['tok-2'] = [null, percentUsed, '2026-10-13T03:00:00Z']
+    w.limits = [{ kind: 'seven_day', percentUsed, resetsAt: '2026-10-13T03:00:00Z' }]
+    await clock.advance(61_000)
+    await $.session.measure({ context: { window: 200_000 }, rateLimits: w.limits, changed: ['rateLimits'] })
+    await clock.settle()
+  }
+  await respond(1)
+  await respond(60)
+  expect(w.envSets).toHaveLength(1)
+  await respond(99)
+  expect(w.envSets).toEqual([
+    { name: 'CLAUDE_SECURESTORAGE_CONFIG_DIR', value: slot(2) },
+    { name: 'CLAUDE_SECURESTORAGE_CONFIG_DIR', value: slot(3) },
+  ])
+})
+
+test('with most room picked, a session whose account has room stays on it, though another week resets sooner', async ($, on) => {
+  const w = fresh()
+  const slot = (id: number) => `${HOME}/.claude/accounts/${id}`
+  w.keychain['Claude Code-credentials'] = blob('tok-1')
+  w.keychain[await keychainItem(slot(2))] = blob('tok-2')
+  w.usage['tok-1'] = [null, 10, '2026-10-18T03:00:00Z']
+  w.usage['tok-2'] = [null, 0, '2026-10-13T03:00:00Z']
+  const accounts = [1, 2].map(id => ({ id: String(id), slot: id === 1 ? '' : slot(id), email: `${id}@example.com` }))
+  const clock = world(on, w, { accounts, 'rotate-to': 'room' })
+  await start($, clock)
+  await clock.advance(6 * 60_000)
+  expect(w.envSets).toEqual([])
 })
 
 test('with only a weekly limit, the session moves once the week reaches 98%, to the account whose week resets soonest', async ($, on) => {
