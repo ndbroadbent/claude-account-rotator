@@ -49,12 +49,12 @@ import type { Credential, Identity } from '../hooks/model.ts'
 export const TICK_MS = 60_000
 /** A login's usage is polled once its last reading is this old: sessions' responses keep busy logins fresher. */
 export const POLL_MS = 5 * 60_000
-/** A check asked for fresh usage reuses a reading at most this old, so 30 sessions settling at once make one call. */
-export const FRESH_MS = 30_000
+/** A check asked for fresh usage reuses a reading at most this old: every session asking within a minute shares one call. */
+export const FRESH_MS = 60_000
 /** A session with no open long poll and no request for this long is gone, even where its process can't be checked. */
 export const STALE_SESSION_MS = 10 * 60_000
 /** After a failed usage call (a 429, an outage), how long before the next: doubling with each failure, up to the most. */
-export const BACKOFF_MS = 60_000
+export const BACKOFF_MS = 2 * 60_000
 export const MAX_BACKOFF_MS = 15 * 60_000
 /** The longest a long poll waits. */
 export const MAX_WAIT_MS = 55_000

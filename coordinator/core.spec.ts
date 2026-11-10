@@ -286,38 +286,40 @@ describe('rotation', () => {
 })
 
 describe('usage calls', () => {
-  test('after a failed call (a 429) the next waits a minute, then twice as long each time, and a Retry-After longer than that', async () => {
+  test('after a failed call (a 429) the next waits two minutes, then twice as long each time, and a Retry-After longer than that', async () => {
     const w = new World()
     const c = await started(w, threeLogins(w))
     w.usageCalls = []
     w.failing.t1 = { status: 429 }
+    // The other logins' 5-minute polls go on meanwhile.
+    const ones = () => w.usageCalls.filter(t => t === 't1')
     await w.advance(FRESH_MS)
     await c.check('1', 'fresh')
-    assert.deepEqual(w.usageCalls, ['t1'])
-    // Sessions asking for fresh usage every 30 s don't get a call each: the first waits a minute.
+    assert.deepEqual(ones(), ['t1'])
+    // Sessions asking for fresh usage every minute don't get a call each: the first waits two minutes.
     await w.advance(FRESH_MS)
     await c.check('1', 'fresh')
-    assert.deepEqual(w.usageCalls, ['t1'])
+    assert.deepEqual(ones(), ['t1'])
     await w.advance(BACKOFF_MS - FRESH_MS)
     await c.check('1', 'fresh')
-    assert.deepEqual(w.usageCalls, ['t1', 't1'])
-    // The second failure waits two minutes.
+    assert.deepEqual(ones(), ['t1', 't1'])
+    // The second failure waits four minutes.
     await w.advance(BACKOFF_MS)
     await c.check('1', 'fresh')
-    assert.deepEqual(w.usageCalls, ['t1', 't1'])
+    assert.deepEqual(ones(), ['t1', 't1'])
     await w.advance(BACKOFF_MS)
     delete w.failing.t1
     await c.check('1', 'fresh')
-    assert.deepEqual(w.usageCalls, ['t1', 't1', 't1'])
+    assert.deepEqual(ones(), ['t1', 't1', 't1'])
     // A call that answers clears the wait.
     await w.advance(FRESH_MS)
     await c.check('1', 'fresh')
-    assert.equal(w.usageCalls.length, 4)
+    assert.equal(ones().length, 4)
     // A Retry-After of ten minutes is kept, past the minute.
     w.usageCalls = []
     w.failing.t2 = { status: 429, retryAfterMs: 10 * 60_000 }
     await c.check('2', 'fresh')
-    // The other logins' polls go on meanwhile; login 2 waits, polls included.
+    // Login 2 waits, its polls included.
     const twos = () => w.usageCalls.filter(t => t === 't2')
     await w.advance(9 * 60_000)
     await c.check('2', 'fresh')

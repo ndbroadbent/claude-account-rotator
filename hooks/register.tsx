@@ -441,7 +441,8 @@ async function settlePending($: Host, isResponse: boolean): Promise<void> {
   const now = await $.clock.now()
   if (now - pending.since < SETTLE_MS) return
   const reading = readingFromLimits((await $.session.usage()).rateLimits, now)
-  await act($, 'POST', `/accounts/${pending.id}/check`, { fresh: true }).catch(error => debug($, `check of account ${pending.id} failed: ${String(error)}`))
+  // Only a response can change this session's reading, so only a response asks for fresh usage: idle sessions compare with what the coordinator already has.
+  if (isResponse) await act($, 'POST', `/accounts/${pending.id}/check`, { fresh: true }).catch(error => debug($, `check of account ${pending.id} failed: ${String(error)}`))
   if (sameUsage(reading, (await getView($)).readings[pending.id], now)) {
     untaken.delete(pending.id)
     await setView($, v => ({ ...v, pending: undefined }))

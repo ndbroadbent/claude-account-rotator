@@ -2,6 +2,12 @@
 
 What each version of the account rotator changed. To get each one as Claude Code starts, turn on auto-update: in `/plugin`, open **Marketplaces**, pick **claude-account-rotator** and choose **Enable auto-update**. To update by hand, run `claude plugin marketplace update claude-account-rotator`, then `claude plugin update account-rotator@claude-account-rotator`, and start a new session.
 
+## 0.5.3 - 2026-11-10
+
+- **Every session shares one usage call a minute per account.** A session that asks the coordinator for fresh usage now gets any reading up to a minute old (it was 30 seconds), so however many sessions ask, the coordinator calls Anthropic's usage endpoint at most once a minute for each account.
+- **Idle sessions no longer ask for fresh usage while a switch waits to be confirmed.** Only a response can confirm a switch, but sessions with no new response still asked every minute, indefinitely. With dozens of sessions moved to one account, that kept the coordinator calling the usage endpoint every 30 seconds for hours (HTTP 429 the whole time). Now only a response asks.
+- After a failed usage call the coordinator waits two minutes before the next (was one), doubling up to 15 minutes.
+
 ## 0.5.2 - 2026-11-10
 
 - **Fixes Claude in Chrome dropping without the mod reconnecting it.** Claude Code sometimes reports "Browser extension is not connected" as an ordinary result rather than an error, and the mod caught only the error, so the drop went unnoticed. It now catches both (a page that merely mentions those words doesn't count), and `list_connected_browsers` listing no browsers counts as a drop too.
