@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { RotateTo, View } from '../types'
-import { DEFAULT_FOOTER, availableNow, braille, browsersFrom, chromeNote, credentialFrom, credentialsFile, footerStyleFrom, healthOf, identityFromProfile, isNoBrowser, isPolicyRefusal, keychainItem, pickTarget, pie, readingFromUsage, rotateToFrom, shouldLeave, roomColor, soonerTarget, weightOf, windowPct } from './model'
+import { DEFAULT_FOOTER, availableNow, braille, browsersFrom, chromeNote, credentialFrom, credentialsFile, footerStyleFrom, healthOf, identityFromProfile, isNoBrowser, isPolicyRefusal, isUnansweredCall, keychainItem, pickTarget, pie, readingFromUsage, rotateToFrom, shouldLeave, roomColor, soonerTarget, weightOf, windowPct } from './model'
 
 const NOW = Date.parse('2026-10-12T10:00:00Z')
 const LATER = '2026-10-12T12:00:00Z'
@@ -251,4 +251,15 @@ test('the notes about Claude in Chrome say what the mod does now and what to tel
   expect(chromeNote({ ...blocked, chrome: { as: '1', isPaired: false } }, 'no-browser')).toMatch(/If it matches, they restart Chrome, then you try again\./)
   expect(chromeNote({ ...onTwo, chromeAccountId: undefined }, 'unset')).toMatch(/doesn't know which one that is\. Ask the user to press Use for Chrome or Try to connect next to it under Chrome in the Claude accounts panel/)
   for (const kind of ['held', 'connecting', 'no-browser', 'blocked', 'unset'] as const) expect(chromeNote(onTwo, kind)).not.toMatch(/Run \/login|run \/login/)
+})
+
+test('a browser call found no browser when Claude Code says so as an error or as a whole result, or the list of browsers is empty; not when a page mentions it', () => {
+  const words = 'Browser extension is not connected: the OAuth token Claude Code is using belongs to a different claude.ai account.'
+  expect(isUnansweredCall('mcp__claude-in-chrome__tabs_context_mcp', words, true)).toBe(true)
+  expect(isUnansweredCall('mcp__claude-in-chrome__tabs_context_mcp', words, false)).toBe(true)
+  expect(isUnansweredCall('mcp__claude-in-chrome__tabs_context_mcp', `Error: ${words}`, false)).toBe(true)
+  expect(isUnansweredCall('mcp__claude-in-chrome__get_page_text', `Troubleshooting\n\nIf you see "${words}", sign in again.`, false)).toBe(false)
+  expect(isUnansweredCall('mcp__claude-in-chrome__list_connected_browsers', '[]', false)).toBe(true)
+  expect(isUnansweredCall('mcp__claude-in-chrome__list_connected_browsers', '[{"deviceId":"d"}]', false)).toBe(false)
+  expect(isUnansweredCall('mcp__claude-in-chrome__get_page_text', '[]', false)).toBe(false)
 })

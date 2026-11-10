@@ -2,6 +2,11 @@
 
 What each version of the account rotator changed. To get each one as Claude Code starts, turn on auto-update: in `/plugin`, open **Marketplaces**, pick **claude-account-rotator** and choose **Enable auto-update**. To update by hand, run `claude plugin marketplace update claude-account-rotator`, then `claude plugin update account-rotator@claude-account-rotator`, and start a new session.
 
+## 0.5.2 - 2026-11-10
+
+- **Fixes Claude in Chrome dropping without the mod reconnecting it.** Claude Code sometimes reports "Browser extension is not connected" as an ordinary result rather than an error, and the mod caught only the error, so the drop went unnoticed. It now catches both (a page that merely mentions those words doesn't count), and `list_connected_browsers` listing no browsers counts as a drop too.
+- **The coordinator backs off when the usage endpoint refuses.** After a failed usage call (an HTTP 429, an outage) it waits a minute before asking for that account again, twice as long after each further failure up to 15 minutes, or as long as a `Retry-After` header says. It used to ask again every 30 seconds while sessions wanted fresh numbers.
+
 ## 0.5.1 - 2026-11-09
 
 - **A session that connects Claude in Chrome as it opens goes straight to the account whose week resets soonest** once connected, where it used to go back to the account it started on (Claude Code's own login) first, and move on only a response or two later. A confirmed switch also lets the rotation look again at once.

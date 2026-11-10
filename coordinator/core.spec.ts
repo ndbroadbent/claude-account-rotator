@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
 import type { Persisted, SignInRun, Stored, UsageAnswer } from './core.ts'
-import { Coordinator, FRESH_MS, MAX_WAIT_MS, POLL_MS, STALE_SESSION_MS, TICK_MS } from './core.ts'
+import { BACKOFF_MS, Coordinator, FRESH_MS, MAX_WAIT_MS, POLL_MS, STALE_SESSION_MS, TICK_MS } from './core.ts'
+import { retryAfter } from './server.ts'
 import type { Identity } from '../hooks/model.ts'
 
 const NOW = Date.parse('2026-11-09T10:00:00Z')
@@ -33,6 +34,8 @@ class World {
   /** slot -> who `claude auth status` says */
   status: Record<string, Identity> = {}
   usageCalls: string[] = []
+  /** Tokens whose usage calls fail, as a 429 or an outage does. */
+  failing: Record<string, { status: number; retryAfterMs?: number }> = {}
   profileCalls: string[] = []
   signIns: { slot: string; email?: string; finish: (code: number | null, errors?: string) => void; cancelled: boolean }[] = []
   signOuts: string[] = []
@@ -48,6 +51,8 @@ class World {
       readStored: async (slot: string): Promise<Stored> => this.stored[slot] ?? { state: 'absent' },
       fetchUsage: async (token: string): Promise<UsageAnswer> => {
         this.usageCalls.push(token)
+        const failure = this.failing[token]
+        if (failure !== undefined) return { kind: 'failed', ...failure }
         const u = this.usage[token]
         if (u === undefined) return { kind: 'rejected' }
         return {
@@ -277,6 +282,57 @@ describe('rotation', () => {
     assert.equal(c.claim(id, 'a'), true)
     assert.equal(c.claim(id, 'b'), false)
     assert.equal(account(c, '2').health.kind, 'login-needed')
+  })
+})
+
+describe('usage calls', () => {
+  test('after a failed call (a 429) the next waits a minute, then twice as long each time, and a Retry-After longer than that', async () => {
+    const w = new World()
+    const c = await started(w, threeLogins(w))
+    w.usageCalls = []
+    w.failing.t1 = { status: 429 }
+    await w.advance(FRESH_MS)
+    await c.check('1', 'fresh')
+    assert.deepEqual(w.usageCalls, ['t1'])
+    // Sessions asking for fresh usage every 30 s don't get a call each: the first waits a minute.
+    await w.advance(FRESH_MS)
+    await c.check('1', 'fresh')
+    assert.deepEqual(w.usageCalls, ['t1'])
+    await w.advance(BACKOFF_MS - FRESH_MS)
+    await c.check('1', 'fresh')
+    assert.deepEqual(w.usageCalls, ['t1', 't1'])
+    // The second failure waits two minutes.
+    await w.advance(BACKOFF_MS)
+    await c.check('1', 'fresh')
+    assert.deepEqual(w.usageCalls, ['t1', 't1'])
+    await w.advance(BACKOFF_MS)
+    delete w.failing.t1
+    await c.check('1', 'fresh')
+    assert.deepEqual(w.usageCalls, ['t1', 't1', 't1'])
+    // A call that answers clears the wait.
+    await w.advance(FRESH_MS)
+    await c.check('1', 'fresh')
+    assert.equal(w.usageCalls.length, 4)
+    // A Retry-After of ten minutes is kept, past the minute.
+    w.usageCalls = []
+    w.failing.t2 = { status: 429, retryAfterMs: 10 * 60_000 }
+    await c.check('2', 'fresh')
+    // The other logins' polls go on meanwhile; login 2 waits, polls included.
+    const twos = () => w.usageCalls.filter(t => t === 't2')
+    await w.advance(9 * 60_000)
+    await c.check('2', 'fresh')
+    assert.deepEqual(twos(), ['t2'])
+    await w.advance(60_000)
+    await c.check('2', 'fresh')
+    assert.deepEqual(twos(), ['t2', 't2'])
+  })
+
+  test('a Retry-After header reads as seconds or as a date', () => {
+    const now = Date.parse('2026-11-10T00:00:00Z')
+    assert.equal(retryAfter('120', now), 120_000)
+    assert.equal(retryAfter('Tue, 10 Nov 2026 00:05:00 GMT', now), 300_000)
+    assert.equal(retryAfter(null, now), undefined)
+    assert.equal(retryAfter('soon', now), undefined)
   })
 })
 

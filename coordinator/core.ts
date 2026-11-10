@@ -53,12 +53,15 @@ export const POLL_MS = 5 * 60_000
 export const FRESH_MS = 30_000
 /** A session with no open long poll and no request for this long is gone, even where its process can't be checked. */
 export const STALE_SESSION_MS = 10 * 60_000
+/** After a failed usage call (a 429, an outage), how long before the next: doubling with each failure, up to the most. */
+export const BACKOFF_MS = 60_000
+export const MAX_BACKOFF_MS = 15 * 60_000
 /** The longest a long poll waits. */
 export const MAX_WAIT_MS = 55_000
 const NOTICE_KEEP = 20
 
 export type Stored = { state: 'present'; credential: Credential | undefined } | { state: 'absent' } | { state: 'unreadable'; code: number }
-export type UsageAnswer = { kind: 'ok'; body: unknown } | { kind: 'rejected' } | { kind: 'failed'; status: number }
+export type UsageAnswer = { kind: 'ok'; body: unknown } | { kind: 'rejected' } | { kind: 'failed'; status: number; retryAfterMs?: number }
 export type SignInRun = { done: Promise<{ code: number | null; errors: string }>; cancel: () => void }
 export type Cancel = () => void
 
@@ -150,6 +153,8 @@ export class Coordinator {
   private readonly waiters = new Set<() => void>()
   private readonly inflight = new Map<string, Promise<void>>()
   private readonly usageAt: Record<string, number> = {}
+  /** Per login, after failed usage calls: no call before `until`; the next failure waits twice `delay`. */
+  private readonly backoff: Record<string, { until: number; delay: number }> = {}
   private readonly unreadable = new Set<string>()
   private readonly stops: Cancel[] = []
   private isTicking = false
@@ -385,6 +390,7 @@ export class Coordinator {
     const most = usage === 'fresh' ? FRESH_MS : POLL_MS
     const readAt = this.readings[id]?.at ?? 0
     const askedAt = this.usageAt[id] ?? 0
+    if (now < (this.backoff[id]?.until ?? 0)) return false
     return now - readAt >= most && now - askedAt >= most
   }
 
@@ -419,7 +425,11 @@ export class Coordinator {
         this.usageAt[id] = now
         const answer = await this.deps.fetchUsage(credential.accessToken)
         if (answer.kind === 'rejected') health = { kind: 'login-needed', why: 'sign-in rejected' }
-        if (answer.kind === 'failed') this.deps.log(`usage for account ${id}: HTTP ${answer.status}`)
+        if (answer.kind === 'failed') {
+          const delay = Math.max(answer.retryAfterMs ?? 0, Math.min(MAX_BACKOFF_MS, (this.backoff[id]?.delay ?? BACKOFF_MS / 2) * 2))
+          this.backoff[id] = { until: now + delay, delay }
+          this.deps.log(`usage for account ${id}: HTTP ${answer.status}; next try in ${Math.round(delay / 1000)} s`)
+        } else delete this.backoff[id]
         if (answer.kind === 'ok') {
           const reading = readingFromUsage(answer.body, this.deps.now())
           if (reading !== undefined && this.find(id) !== undefined) this.putReading(id, reading)

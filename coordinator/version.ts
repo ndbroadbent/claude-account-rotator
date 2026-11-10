@@ -1,5 +1,5 @@
 /** The mod's and the coordinator's version: a session whose mod is newer than the running coordinator upgrades it. */
-export const VERSION = '0.5.0'
+export const VERSION = '0.5.2'
 
 /** -1, 0 or 1 as `a` is older than, the same as, or newer than `b` (dotted numbers). */
 export function compareVersions(a: string, b: string): number {

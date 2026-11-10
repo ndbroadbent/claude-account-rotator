@@ -13,6 +13,15 @@ import { Coordinator } from './core.ts'
 import type { Deps, Persisted, SignInRun, Stored, UsageAnswer } from './core.ts'
 import { VERSION } from './version.ts'
 
+/** A Retry-After header as milliseconds from now: seconds, or an HTTP date. */
+export function retryAfter(header: string | null, now: number): number | undefined {
+  if (header === null) return undefined
+  const seconds = Number(header)
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000)
+  const at = Date.parse(header)
+  return Number.isFinite(at) ? Math.max(0, at - now) : undefined
+}
+
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage'
 const PROFILE_URL = 'https://api.anthropic.com/api/oauth/profile'
 const LOG_LIMIT = 1024 * 1024
@@ -111,7 +120,10 @@ export function nodeDeps(dir: string, log: (text: string) => void): Deps {
       try {
         const res = await fetch(USAGE_URL, { headers: oauthHeaders(accessToken), signal: AbortSignal.timeout(20_000) })
         if (res.status === 401 || res.status === 403) return { kind: 'rejected' }
-        if (!res.ok) return { kind: 'failed', status: res.status }
+        if (!res.ok) {
+          const retryAfterMs = retryAfter(res.headers.get('retry-after'), Date.now())
+          return { kind: 'failed', status: res.status, ...(retryAfterMs === undefined ? {} : { retryAfterMs }) }
+        }
         return { kind: 'ok', body: await res.json() }
       } catch (error) {
         log(`usage call failed: ${String(error)}`)
