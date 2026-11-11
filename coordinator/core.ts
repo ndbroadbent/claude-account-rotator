@@ -18,6 +18,7 @@ import type {
   RotateTo,
   SessionInfo,
   SharedState,
+  UsageWindow,
   View,
 } from '../types/index.d.ts'
 import {
@@ -119,8 +120,14 @@ export function readingFrom(value: unknown): Reading | undefined {
   if (!isObject(value) || typeof value.at !== 'number') return undefined
   const fiveHour = windowOf(value.fiveHour)
   const sevenDay = windowOf(value.sevenDay)
-  if (fiveHour === undefined && sevenDay === undefined) return undefined
-  return { ...(fiveHour ? { fiveHour } : {}), ...(sevenDay ? { sevenDay } : {}), at: value.at }
+  const models: Record<string, UsageWindow> = {}
+  for (const [name, w] of Object.entries(isObject(value.models) ? value.models : {})) {
+    const window = windowOf(w)
+    if (window !== undefined) models[name] = window
+  }
+  const hasModels = Object.keys(models).length > 0
+  if (fiveHour === undefined && sevenDay === undefined && !hasModels) return undefined
+  return { ...(fiveHour ? { fiveHour } : {}), ...(sevenDay ? { sevenDay } : {}), ...(hasModels ? { models } : {}), at: value.at }
 }
 
 /** Two readings that show the same: within half a point on each window, with the same resets. */
@@ -128,7 +135,8 @@ function sameReading(a: Reading | undefined, b: Reading): boolean {
   if (a === undefined) return false
   const same = (x: Reading['fiveHour'], y: Reading['fiveHour']) =>
     (x === undefined && y === undefined) || (x !== undefined && y !== undefined && Math.abs(x.pct - y.pct) < 0.5 && x.resetsAt === y.resetsAt)
-  return same(a.fiveHour, b.fiveHour) && same(a.sevenDay, b.sevenDay)
+  const names = new Set([...Object.keys(a.models ?? {}), ...Object.keys(b.models ?? {})])
+  return same(a.fiveHour, b.fiveHour) && same(a.sevenDay, b.sevenDay) && [...names].every(n => same(a.models?.[n], b.models?.[n]))
 }
 
 export class Coordinator {
@@ -246,10 +254,19 @@ export class Coordinator {
     return this.liveSessions().filter(s => s.accountId === accountId).length
   }
 
-  /** Where sessions on a login go: once they must leave it, or with 'soonest reset' once another's week resets sooner. */
-  moveTo(accountId: string, now = this.deps.now()): string | undefined {
-    const view = this.view(accountId)
+  /**
+   * Where sessions on a login go: once they must leave it, or with 'soonest
+   * reset' once another's week resets sooner. `scope` is a model with a week of
+   * its own (Fable): its sessions also leave once that week is spent.
+   */
+  moveTo(accountId: string, now = this.deps.now(), scope?: string): string | undefined {
+    const view = { ...this.view(accountId), ...(scope === undefined ? {} : { model: scope }) }
     return shouldLeave(view, now) ? pickTarget(view, now)?.id : soonerTarget(view, now)?.id
+  }
+
+  /** The model weeks any login reports, by name. */
+  private scopes(): string[] {
+    return [...new Set(Object.values(this.readings).flatMap(r => Object.keys(r.models ?? {})))].sort()
   }
 
   state(): SharedState {
@@ -258,6 +275,10 @@ export class Coordinator {
       const reading = this.readings[a.id]
       const holder = this.holders[a.id]
       const moveTo = this.moveTo(a.id, now)
+      const moveToFor = Object.fromEntries(this.scopes().flatMap(scope => {
+        const to = this.moveTo(a.id, now, scope)
+        return to === undefined ? [] : [[scope, to]]
+      }))
       return {
         ...a,
         health: this.health[a.id] ?? { kind: 'login-needed', why: 'not read yet' },
@@ -268,6 +289,7 @@ export class Coordinator {
         isSpent: isSpent(reading, now),
         ...(this.retiring.has(a.id) ? { isRetiring: true } : {}),
         ...(moveTo === undefined ? {} : { moveTo }),
+        ...(Object.keys(moveToFor).length === 0 ? {} : { moveToFor }),
         sessionCount: this.sessionCount(a.id),
       }
     })
@@ -331,9 +353,11 @@ export class Coordinator {
   }
 
   /** A newer reading of a login; one that shows the same as the last moves its time on without waking anyone. */
-  private putReading(id: string, reading: Reading): void {
+  /** A response's reading has no model weeks (only the usage endpoint reports them), so it keeps the last poll's. */
+  private putReading(id: string, given: Reading): void {
     const before = this.readings[id]
-    if (before !== undefined && before.at > reading.at) return
+    if (before !== undefined && before.at > given.at) return
+    const reading = given.models === undefined && before?.models !== undefined ? { ...given, models: before.models } : given
     this.readings = { ...this.readings, [id]: reading }
     if (sameReading(before, reading)) this.persist()
     else this.changed()
@@ -499,14 +523,14 @@ export class Coordinator {
     return undefined
   }
 
-  /** A turn hit the usage limit on a login: read it now, and where the usage doesn't show it yet, count its 5-hour window full. */
-  async spent(id: string): Promise<void> {
+  /** A turn hit the usage limit on a login: read it now, and where the usage doesn't show it yet, count the window that limits it full; a session on a model with its own week (`scope`) counts that week. */
+  async spent(id: string, scope?: string): Promise<void> {
     this.need(id)
     await this.check(id, 'fresh')
     const now = this.deps.now()
     const r = this.readings[id]
-    if (this.health[id]?.kind === 'login-needed' || isSpent(r, now)) return
-    this.putReading(id, spentReading(r, now))
+    if (this.health[id]?.kind === 'login-needed' || isSpent(r, now, scope)) return
+    this.putReading(id, spentReading(r, now, scope))
   }
 
   /** A turn's sign-in was rejected on a login. */
@@ -828,7 +852,7 @@ export class Coordinator {
         return ok()
       }
       case 'POST /accounts/:id/spent':
-        await this.spent(id)
+        await this.spent(id, typeof b.model === 'string' && b.model !== '' ? b.model : undefined)
         return ok()
       case 'POST /accounts/:id/rejected':
         this.rejected(id)

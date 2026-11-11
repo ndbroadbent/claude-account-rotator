@@ -2,6 +2,13 @@
 
 What each version of the account rotator changed. To get each one as Claude Code starts, turn on auto-update: in `/plugin`, open **Marketplaces**, pick **claude-account-rotator** and choose **Enable auto-update**. To update by hand, run `claude plugin marketplace update claude-account-rotator`, then `claude plugin update account-rotator@claude-account-rotator`, and start a new session.
 
+## 0.6.0 - 2026-11-11
+
+- **Rotates Fable sessions by Fable's own weekly limit.** Fable has a weekly limit of its own, which runs out before the account's week. Until now the rotation went by the account's week alone, so a Fable session stayed on an account whose Fable week was spent and spent usage credits there. A session on Fable now also moves on once its account is down to 2% of its Fable week, and picks the next account by whichever of its two weeks has less room. Sessions on Opus or Sonnet go by the account's week alone and keep using an account whose Fable week is spent.
+- The coordinator reads each account's Fable week from the usage endpoint's `limits`. Responses don't report it, so while a Fable session's account is past 80% of its Fable week, each response asks for fresh usage (the coordinator still calls the endpoint at most once a minute per account).
+- A Fable session whose turn hits the usage limit while its account's week has room counts the Fable week full, not the account's week, so the account's Opus and Sonnet sessions stay on it.
+- **The panel and the menu bar show each account's Fable week** under its week, and in a Fable session the footer shows whichever of the two has less room. `cli.ts status` adds a column for it.
+
 ## 0.5.3 - 2026-11-10
 
 - **Every session shares one usage call a minute per account.** A session that asks the coordinator for fresh usage now gets any reading up to a minute old (it was 30 seconds), so however many sessions ask, the coordinator calls Anthropic's usage endpoint at most once a minute for each account.

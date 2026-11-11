@@ -19,7 +19,9 @@ import {
   pickTarget,
   readingFromLimits,
   sameUsage,
+  modelWindow,
   shouldLeave,
+  viewScope,
   soonerTarget,
   spentReading,
   windowPct,
@@ -44,6 +46,12 @@ const PANE_COLUMNS = 64
 const SETTLE_MS = 35_000
 /** A switch no response has shown after this long is reported as not taken. */
 const CONFIRM_GIVE_UP_MS = 4 * 60_000
+/** From this percent of a model's own week, a response asks for fresh usage: the poll every 5 minutes could miss the 98% mark. */
+const WATCH_MODEL_FROM = 80
+/** How often a session asks for its model week afresh, at most. */
+const MODEL_FRESH_MS = 60_000
+/** When this session last asked for its model week afresh. */
+let modelCheckedAt = -Infinity
 /**
  * Claude Code refreshes a token 5 minutes before it expires. A refresh that
  * runs while the old login's read is still cached is saved under the new
@@ -210,7 +218,10 @@ async function applyState($: Host, state: SharedState, activeId?: string): Promi
     for (const a of state.accounts) {
       const mine = v.readings[a.id]
       const theirs = a.reading
-      const reading = mine !== undefined && (theirs === undefined || mine.at > theirs.at) ? mine : theirs
+      const newer = mine !== undefined && (theirs === undefined || mine.at > theirs.at) ? mine : theirs
+      // A response's reading has no model weeks: the coordinator's poll has them.
+      const models = newer?.models ?? theirs?.models
+      const reading = newer === undefined || models === undefined ? newer : { ...newer, models }
       if (reading !== undefined) readings[a.id] = reading
     }
     const pick = <T,>(f: (a: SharedState['accounts'][number]) => T | undefined): Record<string, T> =>
@@ -226,6 +237,7 @@ async function applyState($: Host, state: SharedState, activeId?: string): Promi
       holders: pick(a => a.holder),
       expiresAt: pick(a => a.expiresAt),
       moveTo: pick(a => a.moveTo),
+      moveToFor: byModel(state.accounts),
       retiring: state.accounts.filter(a => a.isRetiring).map(a => a.id),
       sessionCounts: pick(a => a.sessionCount),
       combined: state.combined,
@@ -238,6 +250,13 @@ async function applyState($: Host, state: SharedState, activeId?: string): Promi
     }
   })
   await showNotices($, state)
+}
+
+/** Each account's moveToFor turned around: by model, then by account. */
+function byModel(accounts: SharedState['accounts']): Record<string, Record<string, string>> {
+  const out: Record<string, Record<string, string>> = {}
+  for (const a of accounts) for (const [model, to] of Object.entries(a.moveToFor ?? {})) (out[model] ??= {})[a.id] = to
+  return out
 }
 
 async function showNotices($: Host, state: SharedState): Promise<void> {
@@ -332,7 +351,14 @@ function whyLeave(view: View, now: number): string {
   if (view.retiring?.includes(view.activeId)) return `account ${view.activeId} is being removed`
   const r = view.readings[view.activeId]
   const five = windowPct(r?.fiveHour, now) ?? 0
-  const [window, used] = five >= LEAVE_FIVE_HOUR ? ['5-hour window', five] : ['week', windowPct(r?.sevenDay, now) ?? 0]
+  const scope = viewScope(view)
+  const model = windowPct(modelWindow(r, scope), now) ?? 0
+  const [window, used] =
+    five >= LEAVE_FIVE_HOUR
+      ? ['5-hour window', five]
+      : scope !== undefined && model >= (windowPct(r?.sevenDay, now) ?? 0)
+        ? [`${scope} week`, model]
+        : ['week', windowPct(r?.sevenDay, now) ?? 0]
   return view.footer.fill === 'left'
     ? `account ${view.activeId} has ${Math.round(100 - used)}% of its ${window} left`
     : `account ${view.activeId} has used ${Math.round(used)}% of its ${window}`
@@ -344,7 +370,8 @@ function whyLeave(view: View, now: number): string {
  * pick, else its own without the logins a switch didn't take here.
  */
 function targetFor(view: View, now: number): Account | undefined {
-  const shared = view.moveTo?.[view.activeId]
+  const scope = viewScope(view)
+  const shared = scope === undefined ? view.moveTo?.[view.activeId] : view.moveToFor?.[scope]?.[view.activeId]
   if (shared !== undefined && !untaken.has(shared)) return view.accounts.find(a => a.id === shared)
   const own = { ...view, accounts: view.accounts.filter(a => !untaken.has(a.id)) }
   return shouldLeave(view, now) ? pickTarget(own, now) : soonerTarget(own, now)
@@ -493,12 +520,37 @@ async function onMeasure($: Host, limits: readonly SessionRateLimit[]): Promise<
     if ((await getView($)).pending === undefined) await maybeRotate($)
     return
   }
-  const reading = readingFromLimits(limits, await $.clock.now())
-  if (reading === undefined || view.accounts.length === 0) return
+  const now = await $.clock.now()
+  const given = readingFromLimits(limits, now)
+  if (given === undefined || view.accounts.length === 0) return
   const id = view.activeId
+  await noteModel($)
+  // A response reports no model weeks: keep the coordinator's.
+  const models = view.readings[id]?.models
+  const reading = models === undefined ? given : { ...given, models }
   await setView($, v => ({ ...v, readings: { ...v.readings, [id]: reading } }))
-  await report($, id, reading).catch(error => debug($, `usage report failed: ${String(error)}`))
+  await report($, id, given).catch(error => debug($, `usage report failed: ${String(error)}`))
+  await refreshModelWeek($, now)
   await maybeRotate($)
+}
+
+/** Keeps the view's model as `/model` shows it: a model with its own week (Fable) also leaves a login once that week is spent. */
+async function noteModel($: Host): Promise<void> {
+  const model = await $.session.model().catch(() => undefined)
+  if (model !== undefined && model !== (await getView($)).model) await setView($, v => ({ ...v, model }))
+}
+
+/**
+ * A response doesn't report a model's own week, so while this session's model
+ * week runs high, each response asks the coordinator for fresh usage; it calls
+ * the usage endpoint at most once a minute per login, however many ask.
+ */
+async function refreshModelWeek($: Host, now: number): Promise<void> {
+  const view = await getView($)
+  const w = modelWindow(view.readings[view.activeId], viewScope(view))
+  if (w === undefined || (windowPct(w, now) ?? 0) < WATCH_MODEL_FROM || now - modelCheckedAt < MODEL_FRESH_MS) return
+  modelCheckedAt = now
+  await act($, 'POST', `/accounts/${view.activeId}/check`, { fresh: true }).catch(error => debug($, `check failed: ${String(error)}`))
 }
 
 /** A turn that died on a usage limit or a rejected sign-in: switch, then carry on. */
@@ -507,11 +559,15 @@ async function onStopFailure($: Host, error: string): Promise<void> {
   const view = await getView($)
   const active = view.accounts.find(a => a.id === view.activeId)
   if (active === undefined) return
-  await act($, 'POST', `/accounts/${active.id}/${error === 'rate_limit' ? 'spent' : 'rejected'}`, session === undefined ? {} : { sessionId: session.key })
+  const scope = viewScope(view)
+  await act($, 'POST', `/accounts/${active.id}/${error === 'rate_limit' ? 'spent' : 'rejected'}`, {
+    ...(session === undefined ? {} : { sessionId: session.key }),
+    ...(scope === undefined ? {} : { model: scope }),
+  })
   if (error === 'rate_limit') {
     // The coordinator's reading may be older than this session's own: the limit was hit, so the window that limits it is full.
     const now = await $.clock.now()
-    await setView($, v => (shouldLeave(v, now) ? v : { ...v, readings: { ...v.readings, [active.id]: spentReading(v.readings[active.id], now) } }))
+    await setView($, v => (shouldLeave(v, now) ? v : { ...v, readings: { ...v.readings, [active.id]: spentReading(v.readings[active.id], now, scope) } }))
   }
   await setView($, v => ({ ...v, pending: undefined }))
   if (await maybeRotate($)) {
@@ -883,6 +939,7 @@ async function boot($: Host, isInteractive: boolean): Promise<void> {
   const slot = (await $.env.get('CLAUDE_SECURESTORAGE_CONFIG_DIR')) ?? ''
   const pid = await sessionPid($)
   const cwd = await $.session.cwd().catch(() => undefined)
+  await noteModel($)
   session = {
     key: `${sessionId ?? 'session'}:${pid ?? Math.random().toString(36).slice(2)}`,
     slot,
@@ -914,7 +971,8 @@ export const register: Register = on => {
     })
     // A switch settles, and a window resets, with no change at the coordinator to say so.
     $.clock.every(60_000, () => {
-      void settlePending($, false)
+      void noteModel($)
+        .then(() => settlePending($, false))
         .then(() => maybeRotate($))
         .catch(error => debug($, `sync failed: ${String(error)}`))
     })

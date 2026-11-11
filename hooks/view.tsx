@@ -13,6 +13,8 @@ import {
   glyph,
   isOnNormalLogin,
   isSeatPlan,
+  isSpent,
+  modelWindow,
   longBar,
   nextReset,
   planText,
@@ -21,7 +23,7 @@ import {
   roomLeft,
   shown,
   untilText,
-  windowPct,
+  viewScope,
 } from './model'
 
 export type Ui = Pick<Elements[RenderSurface], 'Box' | 'Text' | 'Button'>
@@ -57,7 +59,10 @@ function rooms(view: View, a: Account, i: number, now: number): readonly [number
     return [hasFiveHour(view.readings) ? now5 : undefined, week]
   }
   const r = view.readings[a.id]
-  return [availableNow(r, now), roomLeft(r?.sevenDay, now)]
+  // A session on a model with its own week (Fable) runs out at whichever week is fuller.
+  const week = roomLeft(r?.sevenDay, now)
+  const model = roomLeft(modelWindow(r, viewScope(view)), now)
+  return [availableNow(r, now), model === undefined ? week : week === undefined ? model : Math.min(week, model)]
 }
 
 /** A percent's room color, lighter while the pointer is over the footer. */
@@ -521,20 +526,21 @@ export function Band(ui: Ui, view: View, now: number, act: Actions) {
   }
   const chrome = ChromeBand(ui, view, act)
   if (chrome !== undefined) return chrome
-  const spent = view.accounts.every(a => {
-    const r = view.readings[a.id]
-    return (windowPct(r?.fiveHour, now) ?? 0) >= LEAVE_FIVE_HOUR || (windowPct(r?.sevenDay, now) ?? 0) >= LEAVE_SEVEN_DAY
-  })
+  const scope = viewScope(view)
+  const spent = view.accounts.every(a => isSpent(view.readings[a.id], now, scope))
   if (view.accounts.length > 0 && spent) {
     const at = nextReset(view, now)
     return (
       <Text color="warning">
-        Every Claude account is near its limit{at === undefined ? '' : `; the next frees up ${untilText(at, now)}`}.
+        Every Claude account is near its {scope === undefined ? 'limit' : `${scope} limit`}{at === undefined ? '' : `; the next frees up ${untilText(at, now)}`}.
       </Text>
     )
   }
   return undefined
 }
+
+/** A window's name column: "week", or a model's own week ("Fable"), and a space. */
+const WINDOW_NAME_WIDTH = 6
 
 /** A window's bar and percent at their widest ("▰▰▰▰▰▰▰▰▰▰ 100% left"), so the reset times line up. */
 const BAR_WIDTH = 20
@@ -549,7 +555,7 @@ function windowRow(ui: Ui, fill: Fill, isActive: boolean, name: string, hasReadi
   const left = roomLeft(w, now)
   return (
     <Box flexDirection="row" marginLeft={3}>
-      <Box width={5} flexShrink={0}>
+      <Box width={WINDOW_NAME_WIDTH} flexShrink={0}>
         <Text dimColor={!isActive}>{name}</Text>
       </Box>
       <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
@@ -658,6 +664,12 @@ function accountRows(ui: Ui, view: View, a: Account, now: number, act: Actions) 
       {/* Only a login whose plan has a 5-hour window (as of November 2026, the $100 Max plan) shows one. */}
       {r?.fiveHour !== undefined && windowRow(ui, view.footer.fill, isActive, '5h', true, r.fiveHour, now)}
       {windowRow(ui, view.footer.fill, isActive, 'week', r !== undefined, r?.sevenDay, now)}
+      {/* A model with a week of its own (as of November 2026, Fable): its sessions also move on once it is spent. */}
+      {Object.keys(r?.models ?? {})
+        .sort()
+        .map(name => (
+          <Box key={`model-${name}`}>{windowRow(ui, view.footer.fill, isActive, name, true, r?.models?.[name], now)}</Box>
+        ))}
       {expiry !== undefined && expiry - now < SIGN_IN_WARN_MS && (
         <Text color="warning">   sign-in runs out {untilText(expiry, now)}; signing in again renews it</Text>
       )}
@@ -673,7 +685,7 @@ const RULE_TARGETS: Record<Exclude<RotateTo, 'off'>, string> = {
 }
 
 /** When the rotation moves on, counted the way the footer shows it (room left, or what is used), and where to. */
-function rule(fill: Fill, rotateTo: RotateTo, hasFive: boolean): string {
+function rule(fill: Fill, rotateTo: RotateTo, hasFive: boolean, scope?: string): string {
   if (rotateTo === 'off') return 'Rotation is disabled: the session stays on the account in use until you pick another.'
   const when = hasFive
     ? fill === 'left'
@@ -682,10 +694,11 @@ function rule(fill: Fill, rotateTo: RotateTo, hasFive: boolean): string {
     : fill === 'left'
       ? `Once the account in use has ${100 - LEAVE_SEVEN_DAY}% of its week left`
       : `Once the account in use has used ${LEAVE_SEVEN_DAY}% of its week`
+  const model = scope === undefined ? '' : ` (or of its ${scope} week, as this session uses ${scope})`
   if (rotateTo === 'reset') {
-    return `Every session uses the account whose week resets soonest, so its room is used before it refills. ${when}, moves to the next.`
+    return `Every session uses the account whose week resets soonest, so its room is used before it refills. ${when}${model}, moves to the next.`
   }
-  return `${when}, moves to ${RULE_TARGETS[rotateTo]}.`
+  return `${when}${model}, moves to ${RULE_TARGETS[rotateTo]}.`
 }
 
 /** The pane's first line while Claude Code's security policy refuses every switch. */
@@ -739,7 +752,7 @@ export function Pane(ui: Ui, view: View, now: number, act: Actions) {
   return (
     <Box flexDirection="column" rowGap={1}>
       {CoordinatorLine(ui, view, act)}
-      {view.isSwitchBlocked ? <Text color="warning">{blockedRule(view)}</Text> : <Text dimColor>{rule(view.footer.fill, view.rotateTo, hasFiveHour(view.readings))}</Text>}
+      {view.isSwitchBlocked ? <Text color="warning">{blockedRule(view)}</Text> : <Text dimColor>{rule(view.footer.fill, view.rotateTo, hasFiveHour(view.readings), viewScope(view))}</Text>}
       {LoginLine(ui, view)}
       {section(ui, 'accounts', 'Accounts', accounts)}
       {(view.hasChrome === true || view.chromeAccountId !== undefined || (view.chromeAccountIds?.length ?? 0) > 0) && ChromeSettings(ui, view, act)}

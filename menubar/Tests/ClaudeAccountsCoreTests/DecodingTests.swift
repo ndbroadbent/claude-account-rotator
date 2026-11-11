@@ -100,6 +100,17 @@ import Testing
     #expect(reading.sevenDay?.resetsAt == expected)
   }
 
+  @Test func modelWeeks() throws {
+    let json = #"""
+      {"version": 1, "accounts": [{"id": "1", "reading": {"at": 1,
+        "sevenDay": {"pct": 80, "resetsAt": "2026-11-09T11:20:00Z"},
+        "models": {"Fable": {"pct": 100, "resetsAt": "2026-11-09T11:20:00Z"}, "Bad": "x"}}}]}
+      """#
+    let reading = try #require(try CoordinatorState.decode(Data(json.utf8)).accounts.first?.reading)
+    #expect(reading.modelWeeks.map(\.name) == ["Fable"])
+    #expect(reading.models["Fable"]?.pct == 100)
+  }
+
   @Test func anErrorBodyIsNotAState() {
     #expect(throws: DecodingError.self) {
       try CoordinatorState.decode(Data(#"{"error": "No such thing."}"#.utf8))

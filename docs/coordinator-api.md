@@ -29,7 +29,7 @@ HTTP/1.1 over a Unix domain socket:
 | `PATCH /sessions/:id` | `{ accountId?, isBlocked?, isPending? }` | `{ state }` |
 | `DELETE /sessions/:id` | | `{ ok: true }` |
 | `POST /readings` | `{ accountId, reading, sessionId? }` | `{ state }`. A response's rate-limit windows, as the session saw them. |
-| `POST /accounts/:id/spent` | `{ sessionId? }` | `{ state }`. A turn hit the usage limit on this login. |
+| `POST /accounts/:id/spent` | `{ sessionId?, model? }` | `{ state }`. A turn hit the usage limit on this login. `model` names a model with a week of its own (`Fable`) the session was on: while the login's week has room, that week counts as full, not the login's. |
 | `POST /accounts/:id/rejected` | `{ sessionId? }` | `{ state }`. A turn's sign-in was rejected. |
 | `POST /accounts/:id/check` | `{ fresh? }` | `{ state }`. Re-reads the sign-in now, and with `fresh` the usage too (at most once per 30 s per login). |
 | `POST /check` | | `{ state }`. Re-reads every login now. |
@@ -79,16 +79,21 @@ type AccountState = {
   reading?: {
     fiveHour?: { pct: number; resetsAt?: string }   // pct used, 0-100; resetsAt ISO 8601
     sevenDay?: { pct: number; resetsAt?: string }
+    // A model family's own week, by the name the usage endpoint gives it (as of November 2026, only Fable).
+    // Only the usage endpoint reports these; a session's reading keeps the last poll's.
+    models?: Record<string, { pct: number; resetsAt?: string }>
     at: number                                     // when read, epoch ms
   }
   holder?: { token: string; who: { email: string; orgId?: string; orgName?: string; plan?: string } }
   /** When its access token expires, epoch ms. */
   expiresAt?: number
-  /** Past the leave thresholds (90% of the 5-hour window, or 95% of the week). */
+  /** Past the leave thresholds (90% of the 5-hour window, or 98% of the week). A model's own week doesn't count here. */
   isSpent: boolean
   isRetiring?: boolean
   /** Where sessions on this login go once they must leave it; absent while they can stay or none can take over. */
   moveTo?: string
+  /** The same for sessions on a model with a week of its own, by its name: they leave once either week is at 98%. */
+  moveToFor?: Record<string, string>
   /** Live sessions on it. */
   sessionCount: number
 }

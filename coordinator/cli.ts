@@ -298,11 +298,18 @@ async function status(): Promise<void> {
   // As of November 2026 no plan reports a 5-hour window: shown only where one does.
   const hasFive = state.accounts.some(a => a.reading?.fiveHour !== undefined)
   process.stdout.write(`combined: ${hasFive ? `5-hour ${pct(state.combined.fiveHour?.pct)}, ` : ''}week ${pct(state.combined.sevenDay?.pct)}\n`)
+  // A model with a week of its own (Fable) gets a column, and where its sessions move to.
+  const models = [...new Set(state.accounts.flatMap(a => Object.keys(a.reading?.models ?? {})))].sort()
   for (const a of state.accounts) {
     const r = a.reading
+    const own = models.map(m => `${m} ${pct(r?.models?.[m]?.pct)}  `).join('')
+    const moves = [
+      ...(a.moveTo ? [`moves to ${a.moveTo}`] : []),
+      ...Object.entries(a.moveToFor ?? {}).map(([m, to]) => `${m} moves to ${to}`),
+    ]
     process.stdout.write(
-      `  ${a.id} ${(a.email ?? '(unknown)').padEnd(32)} ${hasFive ? `5h ${pct(r?.fiveHour?.pct)}  ` : ''}wk ${pct(r?.sevenDay?.pct)}  ${a.health.kind}` +
-        `${a.health.kind === 'login-needed' ? ` (${a.health.why})` : ''}, ${a.sessionCount} sessions${a.moveTo ? `, moves to ${a.moveTo}` : ''}\n`,
+      `  ${a.id} ${(a.email ?? '(unknown)').padEnd(32)} ${hasFive ? `5h ${pct(r?.fiveHour?.pct)}  ` : ''}wk ${pct(r?.sevenDay?.pct)}  ${own}${a.health.kind}` +
+        `${a.health.kind === 'login-needed' ? ` (${a.health.why})` : ''}, ${a.sessionCount} sessions${moves.map(m => `, ${m}`).join('')}\n`,
     )
   }
 }

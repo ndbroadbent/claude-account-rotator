@@ -34,6 +34,8 @@ class World {
   /** slot -> who `claude auth status` says */
   status: Record<string, Identity> = {}
   usageCalls: string[] = []
+  /** Tokens' Fable weeks, as the usage endpoint's `limits` lists them. */
+  fable: Record<string, number> = {}
   /** Tokens whose usage calls fail, as a 429 or an outage does. */
   failing: Record<string, { status: number; retryAfterMs?: number }> = {}
   profileCalls: string[] = []
@@ -60,6 +62,9 @@ class World {
           body: {
             five_hour: u[0] === null ? null : { utilization: u[0], resets_at: '2026-11-09T12:00:00Z' },
             seven_day: { utilization: u[1], resets_at: '2026-11-14T03:00:00Z' },
+            ...(this.fable[token] === undefined
+              ? {}
+              : { limits: [{ kind: 'weekly_scoped', percent: this.fable[token], resets_at: '2026-11-14T03:00:00Z', scope: { model: { display_name: 'Fable' }, surface: null } }] }),
           },
         }
       },
@@ -282,6 +287,24 @@ describe('rotation', () => {
     assert.equal(c.claim(id, 'a'), true)
     assert.equal(c.claim(id, 'b'), false)
     assert.equal(account(c, '2').health.kind, 'login-needed')
+  })
+})
+
+describe('model weeks', () => {
+  test('a login\'s Fable week sends Fable sessions on alone, and a response\'s reading keeps it', async () => {
+    const w = new World()
+    const persisted = threeLogins(w)
+    w.usage = { t1: [null, 30], t2: [null, 50], t3: [null, 70] }
+    w.fable = { t1: 99, t2: 10, t3: 40 }
+    const c = await started(w, persisted)
+    assert.deepEqual(account(c, '1').reading?.models, { Fable: { pct: 99, resetsAt: '2026-11-14T03:00:00Z' } })
+    // Fable sessions on 1 go on; the rest stay. Sessions on 2 have room in both.
+    assert.deepEqual(account(c, '1').moveToFor, { Fable: '2' })
+    assert.equal(account(c, '1').moveTo, undefined)
+    assert.equal(account(c, '2').moveToFor, undefined)
+    c.report('1', { sevenDay: { pct: 31, resetsAt: '2026-11-14T03:00:00Z' }, at: w.now + 1 })
+    assert.equal(account(c, '1').reading?.sevenDay?.pct, 31)
+    assert.equal(account(c, '1').reading?.models?.Fable?.pct, 99)
   })
 })
 

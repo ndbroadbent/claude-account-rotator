@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { RotateTo, View } from '../types'
-import { DEFAULT_FOOTER, availableNow, braille, browsersFrom, chromeNote, credentialFrom, credentialsFile, footerStyleFrom, healthOf, identityFromProfile, isNoBrowser, isPolicyRefusal, isUnansweredCall, keychainItem, pickTarget, pie, readingFromUsage, rotateToFrom, shouldLeave, roomColor, soonerTarget, weightOf, windowPct } from './model'
+import { DEFAULT_FOOTER, availableNow, braille, browsersFrom, chromeNote, credentialFrom, credentialsFile, footerStyleFrom, healthOf, identityFromProfile, isNoBrowser, isPolicyRefusal, isUnansweredCall, keychainItem, pickTarget, roomOf, scopeOf, spentReading, pie, readingFromUsage, rotateToFrom, shouldLeave, roomColor, soonerTarget, weightOf, windowPct } from './model'
 
 const NOW = Date.parse('2026-10-12T10:00:00Z')
 const LATER = '2026-10-12T12:00:00Z'
@@ -262,4 +262,49 @@ test('a browser call found no browser when Claude Code says so as an error or as
   expect(isUnansweredCall('mcp__claude-in-chrome__list_connected_browsers', '[]', false)).toBe(true)
   expect(isUnansweredCall('mcp__claude-in-chrome__list_connected_browsers', '[{"deviceId":"d"}]', false)).toBe(false)
   expect(isUnansweredCall('mcp__claude-in-chrome__get_page_text', '[]', false)).toBe(false)
+})
+
+test('reads each model\'s own week from the usage body\'s limits, and which one a session\'s model falls under', () => {
+  const body = {
+    five_hour: null,
+    seven_day: { utilization: 80, resets_at: WEEK_END },
+    limits: [
+      { kind: 'weekly_all', group: 'weekly', percent: 80, resets_at: WEEK_END, scope: null },
+      { kind: 'weekly_scoped', group: 'weekly', percent: 100, resets_at: WEEK_END, scope: { model: { id: null, display_name: 'Fable' }, surface: null } },
+      // A limit on a surface, not a model, is not a model's week.
+      { kind: 'weekly_scoped', group: 'weekly', percent: 50, resets_at: WEEK_END, scope: { model: null, surface: 'cowork' } },
+    ],
+  }
+  const reading = readingFromUsage(body, NOW)
+  expect(reading).toEqual({ sevenDay: { pct: 80, resetsAt: WEEK_END }, models: { Fable: { pct: 100, resetsAt: WEEK_END } }, at: NOW })
+  const readings = { '1': reading ?? { at: NOW } }
+  expect(scopeOf('claude-fable-5-2', readings)).toBe('Fable')
+  expect(scopeOf('Fable 5.2', readings)).toBe('Fable')
+  expect(scopeOf('claude-opus-5-5', readings)).toBeUndefined()
+  expect(scopeOf(undefined, readings)).toBeUndefined()
+})
+
+test('a Fable session leaves at 98% of the Fable week and picks by the smaller room; an Opus session goes by the week alone', () => {
+  const v = view({ '1': [0, 80], '2': [0, 10], '3': [0, 30] })
+  const fable = (pct: number) => ({ Fable: { pct, resetsAt: WEEK_END } })
+  const readings = {
+    '1': { sevenDay: { pct: 80, resetsAt: WEEK_END }, models: fable(98), at: NOW },
+    '2': { sevenDay: { pct: 10, resetsAt: WEEK_END }, models: fable(95), at: NOW },
+    '3': { sevenDay: { pct: 30, resetsAt: WEEK_END }, models: fable(20), at: NOW },
+  }
+  const opus = { ...v, readings, model: 'claude-opus-5-5' }
+  const onFable = { ...opus, model: 'claude-fable-5-2' }
+  expect(shouldLeave(opus, NOW)).toBe(false)
+  expect(shouldLeave(onFable, NOW)).toBe(true)
+  // Account 2 has the most week left, but only 5% of its Fable week.
+  expect(pickTarget(onFable, NOW)?.id).toBe('3')
+  expect(pickTarget(opus, NOW)?.id).toBe('2')
+  expect(roomOf(readings['2'], NOW, 'Fable')).toBe(5)
+  expect(roomOf(readings['2'], NOW)).toBe(90)
+})
+
+test('a turn on Fable that hits a limit while the week has room fills the Fable week, not the week', () => {
+  const r = { sevenDay: { pct: 80, resetsAt: WEEK_END }, models: { Fable: { pct: 96, resetsAt: WEEK_END } }, at: NOW }
+  expect(spentReading(r, NOW, 'Fable')).toEqual({ sevenDay: { pct: 80, resetsAt: WEEK_END }, models: { Fable: { pct: 100, resetsAt: WEEK_END } }, at: NOW })
+  expect(spentReading(r, NOW)).toEqual({ sevenDay: { pct: 100, resetsAt: WEEK_END }, models: { Fable: { pct: 96, resetsAt: WEEK_END } }, at: NOW })
 })

@@ -41,6 +41,10 @@ type World = {
   usage: Record<string, [number | null, number | null, string?]>
   /** access token -> the email of the account it signs in, as the profile endpoint answers */
   owners: Record<string, string>
+  /** access token -> its Fable week's percent, as the usage endpoint's `limits` lists it */
+  fable?: Record<string, number>
+  /** The session's model, as `/model` shows it. */
+  model?: string
   /** The token a /login signs in, where the session reads its sign-in, and its plan. */
   loginToken?: string
   loginPlan?: string
@@ -169,6 +173,14 @@ function coordinatorIn(w: World, clock: MockClock, store: Record<string, unknown
         body: {
           five_hour: five === null ? null : { utilization: five, resets_at: '2026-10-12T12:00:00Z' },
           seven_day: week === null ? null : { utilization: week, resets_at: weekResetsAt },
+          ...(w.fable?.[token] === undefined
+            ? {}
+            : {
+                limits: [
+                  { kind: 'weekly_all', percent: week, resets_at: weekResetsAt, scope: null },
+                  { kind: 'weekly_scoped', percent: w.fable[token], resets_at: weekResetsAt, scope: { model: { id: null, display_name: 'Fable' }, surface: null } },
+                ],
+              }),
         },
       }
     },
@@ -272,6 +284,7 @@ function world(on: On, w: World, store: Record<string, unknown>): MockClock {
   })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.id', () => ({ value: 'session-1' }))
+  on('session.model', () => ({ value: w.model ?? 'claude-opus-5-5' }))
   on('tool.check', () => ({ decision: 'allow' as const }))
   on('session.usage', () => ({ value: { startedAt: NOW, context: { window: 200_000 }, rateLimits: w.limits } }))
   on('session.measure', (_$, e) => ({ changed: e.changed }))
@@ -1733,5 +1746,51 @@ test('a 5-hour window shows only on the row of the login whose plan has one', as
   const texts = async (text: string) => (await pane.findAll({ text })).filter(e => e.type === 'Text')
   expect(await texts('5h')).toHaveLength(1)
   expect(await pane.find({ text: / none reported$/ })).toBeUndefined()
+  await pane.unmount()
+})
+
+/** Account 1, Claude Code's login, resets first with 20% of its week left but its Fable week at 98%; account 2 has room in both. */
+async function fableWorld(on: Parameters<typeof world>[0], model: string): Promise<{ w: World; clock: MockClock; slot2: string }> {
+  const w = fresh()
+  const slot2 = `${HOME}/.claude/accounts/2`
+  w.model = model
+  w.keychain['Claude Code-credentials'] = blob('tok-1')
+  w.keychain[await keychainItem(slot2)] = blob('tok-2')
+  w.usage['tok-1'] = [null, 80, '2026-10-13T03:00:00Z']
+  w.usage['tok-2'] = [null, 10, '2026-10-18T03:00:00Z']
+  w.fable = { 'tok-1': 98, 'tok-2': 5 }
+  const clock = world(on, w, { accounts: [{ id: '1', slot: '', email: '1@example.com' }, { id: '2', slot: slot2, email: '2@example.com' }] })
+  return { w, clock, slot2 }
+}
+
+test('a Fable session moves once its account\'s Fable week reaches 98%, though its week has room', async ($, on) => {
+  const { w, clock, slot2 } = await fableWorld(on, 'claude-fable-5-2')
+  await start($, clock)
+  expect(w.envSets).toEqual([{ name: 'CLAUDE_SECURESTORAGE_CONFIG_DIR', value: slot2 }])
+  expect(w.toasts.filter(t => /^Switched to Claude account 2 .*: account 1 has 2% of its Fable week left\.$/.test(t))).toHaveLength(1)
+})
+
+test('an Opus session stays on an account whose Fable week is spent while its week has room', async ($, on) => {
+  const { w, clock } = await fableWorld(on, 'claude-opus-5-5')
+  await start($, clock)
+  await clock.advance(6 * 60_000)
+  expect(w.envSets).toEqual([])
+})
+
+test('a response keeps the Fable week the coordinator read, and the pane shows it under the week', async ($, on) => {
+  const w = fresh()
+  w.model = 'claude-fable-5-2'
+  w.keychain['Claude Code-credentials'] = blob('tok-1')
+  w.usage['tok-1'] = [null, 40, '2026-10-13T03:00:00Z']
+  w.fable = { 'tok-1': 60 }
+  const clock = world(on, w, { accounts: [{ id: '1', slot: '', email: 'one@example.com' }] })
+  await start($, clock)
+  w.limits = [{ kind: 'seven_day', percentUsed: 41, resetsAt: '2026-10-13T03:00:00Z' }]
+  await $.session.measure({ context: { window: 200_000 }, rateLimits: w.limits, changed: ['rateLimits'] })
+  await clock.settle()
+  const pane = await $.ui.mount({ plugin: 'account-rotator', surface: 'terminal', component: 'Pane', requestId: 'claude-accounts', props: PANE_PROPS })
+  expect(await pane.find({ text: 'Fable' })).toBeDefined()
+  expect(await pane.find({ text: /40% left/ })).toBeDefined()
+  expect(await pane.find({ text: /59% left/ })).toBeDefined()
   await pane.unmount()
 })

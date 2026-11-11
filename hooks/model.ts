@@ -66,10 +66,34 @@ export function availableNow(r: Reading | undefined, now: number): number | unde
   return (windowPct(r?.sevenDay, now) ?? 0) >= LEAVE_SEVEN_DAY ? 0 : five
 }
 
-export function isSpent(r: Reading | undefined, now: number): boolean {
+/**
+ * Which of the logins' model weeks a model falls under, by name: `Fable` for
+ * `claude-fable-5-2` or "Fable 5.2". Undefined for a model with no week of its
+ * own (Opus, Sonnet), which only the login's week limits.
+ */
+export function scopeOf(model: string | undefined, readings: Readonly<Record<string, Reading>>): string | undefined {
+  if (model === undefined || model === '') return undefined
+  const m = model.toLowerCase()
+  const names = new Set(Object.values(readings).flatMap(r => Object.keys(r.models ?? {})))
+  return [...names].find(name => m.includes(name.toLowerCase()))
+}
+
+/** The model week this session's model falls under, if any. */
+export function viewScope(view: View): string | undefined {
+  return scopeOf(view.model, view.readings)
+}
+
+/** A login's week for one model family, by name. */
+export function modelWindow(r: Reading | undefined, scope: string | undefined): UsageWindow | undefined {
+  return scope === undefined ? undefined : r?.models?.[scope]
+}
+
+/** Past a leave threshold: the 5-hour window, the week, or (for a session on such a model) the model's own week. */
+export function isSpent(r: Reading | undefined, now: number, scope?: string): boolean {
   return (
     (windowPct(r?.fiveHour, now) ?? 0) >= LEAVE_FIVE_HOUR ||
-    (windowPct(r?.sevenDay, now) ?? 0) >= LEAVE_SEVEN_DAY
+    (windowPct(r?.sevenDay, now) ?? 0) >= LEAVE_SEVEN_DAY ||
+    (windowPct(modelWindow(r, scope), now) ?? 0) >= LEAVE_SEVEN_DAY
   )
 }
 
@@ -77,7 +101,7 @@ export function shouldLeave(view: View, now: number): boolean {
   return (
     view.health[view.activeId]?.kind === 'login-needed' ||
     view.retiring?.includes(view.activeId) === true ||
-    isSpent(view.readings[view.activeId], now)
+    isSpent(view.readings[view.activeId], now, viewScope(view))
   )
 }
 
@@ -95,9 +119,15 @@ export function hasFiveHour(readings: Readonly<Record<string, Reading>>): boolea
   return Object.values(readings).some(r => r.fiveHour !== undefined)
 }
 
-/** The room a login has to rotate to: what it can serve right now, or its week's room where it reports no 5-hour window. */
-function roomOf(r: Reading | undefined, now: number): number | undefined {
-  return availableNow(r, now) ?? roomLeft(r?.sevenDay, now)
+/**
+ * The room a login has to rotate to: what it can serve right now, or its
+ * week's room where it reports no 5-hour window; for a session on a model with
+ * a week of its own, the smaller of that and the model's week's room.
+ */
+export function roomOf(r: Reading | undefined, now: number, scope?: string): number | undefined {
+  const room = availableNow(r, now) ?? roomLeft(r?.sevenDay, now)
+  const model = roomLeft(modelWindow(r, scope), now)
+  return model === undefined ? room : room === undefined ? model : Math.min(room, model)
 }
 
 /**
@@ -130,8 +160,13 @@ export function soonerTarget(view: View, now: number): Account | undefined {
   return Number.isFinite(at) && at + SOONER_BY_MS <= limitReset(view.readings[view.activeId], now) ? target : undefined
 }
 
-/** A login's reading once a turn hit its usage limit before its usage showed it: the window that limits it, full. */
-export function spentReading(r: Reading | undefined, now: number): Reading {
+/** A login's reading once a turn hit its usage limit before its usage showed it: the window that limits it (for a session on a model with its own week, that week), full. */
+export function spentReading(r: Reading | undefined, now: number, scope?: string): Reading {
+  // A session on a model with its own week (Fable) that hits a limit while the login's week has room hit that model's week.
+  if (scope !== undefined && (windowPct(r?.sevenDay, now) ?? 0) < LEAVE_SEVEN_DAY && r?.fiveHour === undefined) {
+    const resetsAt = (modelWindow(r, scope) ?? r?.sevenDay)?.resetsAt
+    return { ...r, models: { ...r?.models, [scope]: { pct: 100, ...(resetsAt ? { resetsAt } : {}) } }, at: now }
+  }
   const key = limitingWindow(r)
   const resetsAt = r?.[key]?.resetsAt
   return { ...r, [key]: { pct: 100, ...(resetsAt ? { resetsAt } : {}) }, at: now }
@@ -145,14 +180,15 @@ export function spentReading(r: Reading | undefined, now: number): Reading {
  * With the rotation off, Rotate now takes the one with the most room.
  */
 export function pickTarget(view: View, now: number): Account | undefined {
+  const scope = viewScope(view)
   const ready = view.accounts.filter(
     a =>
       a.id !== view.activeId &&
       view.health[a.id]?.kind === 'ok' &&
       view.retiring?.includes(a.id) !== true &&
-      !isSpent(view.readings[a.id], now),
+      !isSpent(view.readings[a.id], now, scope),
   )
-  const available = (a: Account) => roomOf(view.readings[a.id], now) ?? 100
+  const available = (a: Account) => roomOf(view.readings[a.id], now, scope) ?? 100
   const byRoom = (a: Account, b: Account) => available(b) - available(a)
   switch (view.rotateTo) {
     case 'room':
@@ -188,14 +224,33 @@ function windowFrom(value: unknown): UsageWindow | undefined {
   return { pct: utilization, ...(typeof resets_at === 'string' ? { resetsAt: resets_at } : {}) }
 }
 
+/**
+ * The weeks a model family has of its own, from the usage body's `limits`:
+ * each `weekly_scoped` limit scoped to a model, by the model's display name.
+ */
+function modelWindowsFrom(limits: unknown): Record<string, UsageWindow> | undefined {
+  if (!Array.isArray(limits)) return undefined
+  const models: Record<string, UsageWindow> = {}
+  for (const limit of limits as unknown[]) {
+    if (typeof limit !== 'object' || limit === null) continue
+    const { kind, percent, resets_at, scope } = limit as { kind?: unknown; percent?: unknown; resets_at?: unknown; scope?: unknown }
+    const model = (scope as { model?: { display_name?: unknown } } | null | undefined)?.model?.display_name
+    const surface = (scope as { surface?: unknown } | null | undefined)?.surface
+    if (kind !== 'weekly_scoped' || typeof model !== 'string' || model === '' || surface != null || typeof percent !== 'number') continue
+    models[model] = { pct: percent, ...(typeof resets_at === 'string' ? { resetsAt: resets_at } : {}) }
+  }
+  return Object.keys(models).length === 0 ? undefined : models
+}
+
 /** A reading from the body of GET /api/oauth/usage. */
 export function readingFromUsage(body: unknown, now: number): Reading | undefined {
   if (typeof body !== 'object' || body === null) return undefined
-  const { five_hour, seven_day } = body as { five_hour?: unknown; seven_day?: unknown }
+  const { five_hour, seven_day, limits } = body as { five_hour?: unknown; seven_day?: unknown; limits?: unknown }
   const fiveHour = windowFrom(five_hour)
   const sevenDay = windowFrom(seven_day)
-  if (fiveHour === undefined && sevenDay === undefined) return undefined
-  return { ...(fiveHour ? { fiveHour } : {}), ...(sevenDay ? { sevenDay } : {}), at: now }
+  const models = modelWindowsFrom(limits)
+  if (fiveHour === undefined && sevenDay === undefined && models === undefined) return undefined
+  return { ...(fiveHour ? { fiveHour } : {}), ...(sevenDay ? { sevenDay } : {}), ...(models ? { models } : {}), at: now }
 }
 
 /** A reading from the rate-limit windows the last response reported. */

@@ -1,8 +1,13 @@
 /** One usage window of a login: percent used, and when it resets (ISO 8601). */
 export type UsageWindow = { pct: number; resetsAt?: string }
 
-/** A login's usage as last read, `at` in epoch milliseconds. */
-export type Reading = { fiveHour?: UsageWindow; sevenDay?: UsageWindow; at: number }
+/**
+ * A login's usage as last read, `at` in epoch milliseconds. `models` holds the
+ * weeks a model family has of its own, by the name the usage endpoint gives it
+ * (`Fable`): a session on that model also stops at its own week. Only the
+ * usage endpoint reports them, not a response.
+ */
+export type Reading = { fiveHour?: UsageWindow; sevenDay?: UsageWindow; models?: Record<string, UsageWindow>; at: number }
 
 /** Whether a login can serve requests, or why not. */
 export type Health =
@@ -89,6 +94,8 @@ export type AccountState = Account & {
   isRetiring?: boolean
   /** Where sessions on it go once they must leave it; absent while they can stay or none can take over. */
   moveTo?: string
+  /** The same for sessions on a model with its own week (`Fable`), by the model's name: they leave once either week is spent. */
+  moveToFor?: Record<string, string>
   /** Live sessions on it. */
   sessionCount: number
 }
@@ -137,6 +144,10 @@ export type View = {
   expiresAt?: Record<string, number>
   /** Where the coordinator sends sessions on each login that must leave it. */
   moveTo?: Record<string, string>
+  /** The same for sessions on a model with its own week, by the model's name, then by login. */
+  moveToFor?: Record<string, Record<string, string>>
+  /** This session's model, as `/model` shows it: a model with its own week (Fable) also leaves a login once that week is spent. */
+  model?: string
   /** Logins being removed. */
   retiring?: string[]
   /** Live sessions on each login, every session counted. */

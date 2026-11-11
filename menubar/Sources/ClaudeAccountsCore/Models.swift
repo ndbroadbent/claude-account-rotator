@@ -41,21 +41,31 @@ public struct UsageWindow: Decodable, Sendable, Equatable {
 public struct Reading: Decodable, Sendable, Equatable {
   public var fiveHour: UsageWindow?
   public var sevenDay: UsageWindow?
+  /// The weeks a model family has of its own, by name ("Fable"): its sessions also move on once it is spent.
+  public var models: [String: UsageWindow]
   public var at: Date?
 
-  public init(fiveHour: UsageWindow? = nil, sevenDay: UsageWindow? = nil, at: Date? = nil) {
+  public init(fiveHour: UsageWindow? = nil, sevenDay: UsageWindow? = nil, models: [String: UsageWindow] = [:], at: Date? = nil) {
     self.fiveHour = fiveHour
     self.sevenDay = sevenDay
+    self.models = models
     self.at = at
   }
 
-  enum CodingKeys: String, CodingKey { case fiveHour, sevenDay, at }
+  enum CodingKeys: String, CodingKey { case fiveHour, sevenDay, models, at }
 
   public init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
     fiveHour = c.lenient(UsageWindow.self, .fiveHour)
     sevenDay = c.lenient(UsageWindow.self, .sevenDay)
+    // A model's week that can't be read is left out, not the rest with it.
+    models = (c.lenient([String: Lenient<UsageWindow>].self, .models) ?? [:]).compactMapValues(\.value)
     at = c.epochDate(.at)
+  }
+
+  /// The model weeks by name, in a steady order.
+  public var modelWeeks: [(name: String, window: UsageWindow)] {
+    models.keys.sorted().compactMap { name in models[name].map { (name, $0) } }
   }
 
   public subscript(kind: UsageWindowKind) -> UsageWindow? {
@@ -413,6 +423,12 @@ extension Date {
   }
 
   public var epochMs: Double { timeIntervalSince1970 * 1000 }
+}
+
+/// A value that decodes as nil where it can't be read, so a collection of them keeps the rest.
+struct Lenient<T: Decodable>: Decodable {
+  let value: T?
+  init(from decoder: Decoder) throws { value = try? T(from: decoder) }
 }
 
 extension KeyedDecodingContainer {

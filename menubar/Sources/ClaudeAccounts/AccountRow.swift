@@ -52,6 +52,10 @@ struct AccountRow: View {
           UsageLine(title: "5-hour", window: fiveHour, now: now, display: display)
         }
         UsageLine(title: "Week", window: account.reading?.sevenDay, now: now, display: display)
+        // A model with a week of its own (as of November 2026, Fable): its sessions move on once it is spent.
+        ForEach(account.reading?.modelWeeks ?? [], id: \.name) { week in
+          UsageLine(title: week.name, window: week.window, now: now, display: display)
+        }
       }
       // A login that needs signing in has a stale reading.
       .opacity(account.health.isLoginNeeded || account.health.isLoggingIn ? 0.55 : 1)
