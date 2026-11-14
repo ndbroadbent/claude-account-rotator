@@ -86,7 +86,7 @@ export type AccountState = Account & {
   holder?: Holder
   /** When its access token expires, epoch ms. */
   expiresAt?: number
-  /** The plan's size: 20 for Max 20x, 5 for Max 5x, 1 for Pro or unknown. */
+  /** The plan's size: 10 for Ultra (formerly Max 20x), 5 for Max (formerly Max 5x), 1 for Pro or unknown. */
   weight: number
   /** Past the leave thresholds. */
   isSpent: boolean
@@ -158,8 +158,11 @@ export type View = {
   coordinator?: { info?: CoordinatorInfo; error?: string }
   /** The login this session sends its requests with. */
   activeId: string
-  /** Set after a switch until a response shows the new login's usage. */
-  pending?: { id: string; from: string; since: number }
+  /**
+   * Set after a switch until a response shows the new login's usage. `isPicked`:
+   * the person pressed Use now, so the rotation leaves it be until a response confirms it.
+   */
+  pending?: { id: string; from: string; since: number; isPicked?: boolean }
   /** Account id whose removal waits for a second press. */
   removing?: string
   footer: FooterStyle

@@ -76,21 +76,19 @@ public struct SessionGroup: Equatable, Sendable, Identifiable {
 }
 
 public enum PlanLabel {
-  /// "Max 20x", "Max 5x", "Pro", "Team seat", "Enterprise seat", or nil when nothing says.
+  /// "Ultra", "Max", "Pro", "Team seat", "Enterprise seat", or nil when nothing says. As of November 2026
+  /// Anthropic calls Max 20x Ultra and Max 5x Max; the rate limit tiers still say `max_20x` and `max_5x`.
   public static func label(plan: String?, tier: String?, weight: Double) -> String? {
     let plan = plan?.lowercased() ?? ""
     let tier = tier?.lowercased() ?? ""
     if plan == "team" || tier.contains("team") { return "Team seat" }
     if plan == "enterprise" || tier.contains("enterprise") { return "Enterprise seat" }
-    if plan == "max" || tier.contains("max") {
-      if tier.contains("20x") || weight >= 20 { return "Max 20x" }
-      if tier.contains("5x") || weight >= 5 { return "Max 5x" }
-      return "Max"
-    }
+    if plan == "ultra" || tier.contains("ultra") || tier.contains("20x") { return "Ultra" }
+    if plan == "max" || tier.contains("max") { return weight >= 10 ? "Ultra" : "Max" }
     if plan == "pro" || tier.contains("pro") { return "Pro" }
     if !plan.isEmpty { return plan.prefix(1).uppercased() + plan.dropFirst() }
-    if weight >= 20 { return "Max 20x" }
-    if weight >= 5 { return "Max 5x" }
+    if weight >= 10 { return "Ultra" }
+    if weight >= 5 { return "Max" }
     return nil
   }
 

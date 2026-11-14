@@ -15,7 +15,7 @@
       "orgId": "org-1",
       "plan": "max",
       "tier": "default_claude_max_20x",
-      "weight": 20,
+      "weight": 10,
       "health": {
         "kind": "ok",
         "refreshExpiresAt": 1795946400000
@@ -43,7 +43,7 @@
       "orgName": "Example Studio",
       "plan": "max",
       "tier": "default_claude_max_20x",
-      "weight": 20,
+      "weight": 10,
       "health": {
         "kind": "ok",
         "refreshExpiresAt": 1795773600000
@@ -71,7 +71,7 @@
       "orgId": "org-3",
       "plan": "max",
       "tier": "default_claude_max_20x",
-      "weight": 20,
+      "weight": 10,
       "health": {
         "kind": "login-needed",
         "why": "Claude rejected its sign-in: the refresh token has expired."

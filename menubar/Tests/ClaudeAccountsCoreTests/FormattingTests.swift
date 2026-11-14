@@ -137,9 +137,13 @@ import Testing
 
 @Suite struct MiscTests {
   @Test func planLabels() {
-    #expect(PlanLabel.label(plan: "max", tier: "default_claude_max_20x", weight: 20) == "Max 20x")
-    #expect(PlanLabel.label(plan: "max", tier: nil, weight: 5) == "Max 5x")
-    #expect(PlanLabel.label(plan: nil, tier: "default_claude_max_5x", weight: 1) == "Max 5x")
+    #expect(PlanLabel.label(plan: "max", tier: "default_claude_max_20x", weight: 10) == "Ultra")
+    #expect(PlanLabel.label(plan: "max", tier: nil, weight: 10) == "Ultra")
+    #expect(PlanLabel.label(plan: nil, tier: "default_claude_ultra", weight: 1) == "Ultra")
+    #expect(PlanLabel.label(plan: "max", tier: "default_claude_max_5x", weight: 5) == "Max")
+    #expect(PlanLabel.label(plan: "max", tier: nil, weight: 5) == "Max")
+    #expect(PlanLabel.label(plan: nil, tier: "default_claude_max_5x", weight: 1) == "Max")
+    #expect(PlanLabel.label(plan: nil, tier: nil, weight: 10) == "Ultra")
     #expect(PlanLabel.label(plan: "pro", tier: nil, weight: 1) == "Pro")
     #expect(PlanLabel.label(plan: "team", tier: nil, weight: 1) == "Team seat")
     #expect(PlanLabel.label(plan: "enterprise", tier: nil, weight: 1) == "Enterprise seat")

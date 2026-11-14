@@ -71,7 +71,7 @@ type AccountState = {
   orgName?: string
   plan?: string                  // 'max' | 'pro' | 'team' | 'enterprise' | ...
   tier?: string                  // e.g. 'default_claude_max_20x'
-  weight: number                 // plan size: 20 for Max 20x, 5 for Max 5x, 1 for Pro or unknown
+  weight: number                 // plan size: 10 for Ultra (formerly Max 20x), 5 for Max (formerly Max 5x), 1 for Pro or unknown
   health:
     | { kind: 'ok'; refreshExpiresAt?: number }
     | { kind: 'login-needed'; why: string }

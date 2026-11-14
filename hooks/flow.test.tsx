@@ -288,6 +288,8 @@ function world(on: On, w: World, store: Record<string, unknown>): MockClock {
   on('tool.check', () => ({ decision: 'allow' as const }))
   on('session.usage', () => ({ value: { startedAt: NOW, context: { window: 200_000 }, rateLimits: w.limits } }))
   on('session.measure', (_$, e) => ({ changed: e.changed }))
+  on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
   on('classic.StopFailure', () => ({}))
   on('ui.toast', (_$, e) => {
     w.toasts.push(e.text)
@@ -1667,6 +1669,41 @@ test('with soonest reset, a session whose account has room moves at start-up to 
     { name: 'CLAUDE_SECURESTORAGE_CONFIG_DIR', value: slot(2) },
     { name: 'CLAUDE_SECURESTORAGE_CONFIG_DIR', value: slot(3) },
   ])
+})
+
+/** Three logins with soonest reset: 2 resets in two hours, then 3, then Claude Code's own (1). The session starts on 1 and moves to 2. */
+async function idleOnTwo(on: Parameters<typeof world>[0], $: Engine): Promise<{ w: World; clock: MockClock; slot: (id: number) => string }> {
+  const w = fresh()
+  const slot = (id: number) => `${HOME}/.claude/accounts/${id}`
+  w.keychain['Claude Code-credentials'] = blob('tok-1')
+  w.keychain[await keychainItem(slot(2))] = blob('tok-2')
+  w.keychain[await keychainItem(slot(3))] = blob('tok-3')
+  w.usage['tok-1'] = [null, 10, '2026-10-18T03:00:00Z']
+  w.usage['tok-2'] = [null, 0, '2026-10-12T12:00:00Z']
+  w.usage['tok-3'] = [null, 0, '2026-10-15T03:00:00Z']
+  const accounts = [1, 2, 3].map(id => ({ id: String(id), slot: id === 1 ? '' : slot(id), email: `${id}@example.com` }))
+  const clock = world(on, w, { accounts })
+  await start($, clock)
+  expect(w.envSets).toEqual([{ name: 'CLAUDE_SECURESTORAGE_CONFIG_DIR', value: slot(2) }])
+  // Account 2's week resets; account 3's now resets first.
+  w.usage['tok-2'] = [null, 0, '2026-10-19T12:00:00Z']
+  return { w, clock, slot }
+}
+
+test('with soonest reset, an idle session whose switch no response has confirmed yet moves on once another week resets first', async ($, on) => {
+  const { w, clock, slot } = await idleOnTwo(on, $)
+  await clock.advance(3 * HOUR)
+  expect(w.envSets.map(e => e.value)).toEqual([slot(2), slot(3)])
+})
+
+test('a switch waiting for its response stays put while a turn runs, and moves on once the turn ends', async ($, on) => {
+  const { w, clock, slot } = await idleOnTwo(on, $)
+  await $.turn.start({ text: 'go on', turnId: 'turn-1' })
+  await clock.advance(3 * HOUR)
+  expect(w.envSets.map(e => e.value)).toEqual([slot(2)])
+  await $.turn.complete({ turnId: 'turn-1', answer: '', durationMs: 1, isAborted: false, reason: 'answer' })
+  await clock.advance(61_000)
+  expect(w.envSets.map(e => e.value)).toEqual([slot(2), slot(3)])
 })
 
 test('with most room picked, a session whose account has room stays on it, though another week resets sooner', async ($, on) => {

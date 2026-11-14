@@ -13,7 +13,7 @@ import Testing
 
     let first = state.accounts[0]
     #expect(first.email == "alex@example.com")
-    #expect(first.weight == 20)
+    #expect(first.weight == 10)
     #expect(first.sessionCount == 12)
     #expect(first.health == .ok(refreshExpiresAt: Date(epochMs: 1_795_946_400_000)))
     #expect(first.reading?.fiveHour?.pct == 62)
@@ -40,7 +40,7 @@ import Testing
   @Test func singleAccountFixture() throws {
     let state = try loadFixture("single-account")
     #expect(state.accounts.count == 1)
-    #expect(PlanLabel.label(for: state.accounts[0]) == "Max 5x")
+    #expect(PlanLabel.label(for: state.accounts[0]) == "Max")
     #expect(!state.hasLoginNeeded)
   }
 

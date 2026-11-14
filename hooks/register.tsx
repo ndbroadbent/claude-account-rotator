@@ -83,6 +83,14 @@ let held: { target: Account; why: string; timer: Timer } | undefined
 const untaken = new Set<string>()
 /** When this session last moved to another login: until SETTLE_MS after, its requests may still go out as the one before. */
 let movedAt: number | undefined
+
+/**
+ * The turns under way in this session, its subagents' too. A switch waits for a
+ * response to confirm it, and while one of these runs that response may be on
+ * its way: the rotation leaves the switch be. An idle session's switch can
+ * wait for days; with none running, the rotation may move it on again.
+ */
+const turns = new Set<string>()
 /** Connect is under way: the rotation waits for it, and browser calls are held back. */
 let isConnectingChrome = false
 /** This session as the coordinator knows it: its id there, and the details it registers with. */
@@ -383,9 +391,10 @@ let rotating: Promise<boolean> | undefined
 /**
  * Once the active login is spent, locked out or being removed, or with
  * 'soonest reset' once another login's week resets sooner (at start-up too),
- * moves to where the coordinator sends sessions on it; never while the
- * rotation is off, Claude Code's policy refuses it, or Connect holds the
- * session where it is.
+ * moves to where the coordinator sends sessions on it, a session whose last
+ * switch still waits for a response too; never while the rotation is off,
+ * Claude Code's policy refuses it, Connect holds the session where it is, or a
+ * turn runs while a switch waits, or the switch waiting is one the person picked.
  */
 function maybeRotate($: Host): Promise<boolean> {
   rotating ??= rotateOnce($).finally(() => {
@@ -397,7 +406,7 @@ function maybeRotate($: Host): Promise<boolean> {
 async function rotateOnce($: Host): Promise<boolean> {
   const now = await $.clock.now()
   const view = await getView($)
-  if (view.accounts.length === 0 || isConnectingChrome || view.isSwitchBlocked || view.pending !== undefined) return false
+  if (view.accounts.length === 0 || isConnectingChrome || view.isSwitchBlocked || (view.pending !== undefined && (view.pending.isPicked === true || turns.size > 0))) return false
   const isLeaving = shouldLeave(view, now)
   if (!isLeaving && view.rotateTo !== 'reset') return false
   const isRetiring = view.retiring?.includes(view.activeId) === true
@@ -447,7 +456,8 @@ async function switchTo($: Host, target: Account, why: string, isQuiet = false):
   await setView($, v => ({
     ...v,
     activeId: target.id,
-    pending: { id: target.id, from: v.activeId, since: now },
+    // A switch made while another waits keeps the login the last response confirmed, which a switch that doesn't take goes back to.
+    pending: { id: target.id, from: v.pending?.from ?? v.activeId, since: now },
     removing: undefined,
   }))
   void patchSession($, { accountId: target.id, isPending: true })
@@ -907,7 +917,11 @@ function actions($: Host): Actions {
       background(
         getView($).then(view => {
           const account = view.accounts.find(a => a.id === id)
-          return account === undefined ? false : switchTo($, account, 'you picked it')
+          if (account === undefined) return false
+          return switchTo($, account, 'you picked it').then(async isMoved => {
+            if (isMoved) await setView($, v => (v.pending === undefined ? v : { ...v, pending: { ...v.pending, isPicked: true } }))
+            return isMoved
+          })
         }),
       ),
     askRemove: id => background(setView($, v => ({ ...v, removing: id }))),
@@ -983,6 +997,16 @@ export const register: Register = on => {
     if (session !== undefined) void api($, 'DELETE', `/sessions/${encodeURIComponent(session.key)}`).catch(() => undefined)
     return next(e)
   }).catch(($, e, next) => next(e))
+
+  on('turn.start', async ($, e, next) => {
+    turns.add(e.turnId)
+    return next(e)
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    turns.delete(e.turnId)
+    return next(e)
+  })
 
   on('session.measure', async ($, e, next) => {
     if (e.changed.includes('rateLimits')) {

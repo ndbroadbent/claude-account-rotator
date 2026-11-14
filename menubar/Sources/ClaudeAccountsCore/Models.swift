@@ -115,7 +115,7 @@ public struct AccountState: Decodable, Sendable, Equatable, Identifiable {
   public var orgName: String?
   public var plan: String?
   public var tier: String?
-  /// Plan size: 20 for Max 20x, 5 for Max 5x, 1 for Pro or unknown.
+  /// Plan size: 10 for Ultra (formerly Max 20x), 5 for Max (formerly Max 5x), 1 for Pro or unknown.
   public var weight: Double
   public var health: Health
   public var reading: Reading?

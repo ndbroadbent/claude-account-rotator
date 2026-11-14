@@ -2,6 +2,11 @@
 
 What each version of the account rotator changed. To get each one as Claude Code starts, turn on auto-update: in `/plugin`, open **Marketplaces**, pick **claude-account-rotator** and choose **Enable auto-update**. To update by hand, run `claude plugin marketplace update claude-account-rotator`, then `claude plugin update account-rotator@claude-account-rotator`, and start a new session.
 
+## 0.6.1 - 2026-11-14
+
+- **An idle session whose switch hasn't been confirmed moves on with the rotation.** A switch waits for a response to confirm it, and the rotation used to leave a session alone until then. An idle session has no new response, so one the rotation moved to the account resetting soonest stayed there after that account reset, sometimes for days, until its next turn ran on it. The rotation now moves such a session on as it would any other, except while a turn is running (its response may be on the way) or when you picked the account with **Use now**, which stays until a response confirms it.
+- **The menu bar app names plans as Anthropic does now:** Ultra (formerly Max 20x) and Max (formerly Max 5x).
+
 ## 0.6.0 - 2026-11-11
 
 - **Rotates Fable sessions by Fable's own weekly limit.** Fable has a weekly limit of its own, which runs out before the account's week. Until now the rotation went by the account's week alone, so a Fable session stayed on an account whose Fable week was spent and spent usage credits there. A session on Fable now also moves on once its account is down to 2% of its Fable week, and picks the next account by whichever of its two weeks has less room. Sessions on Opus or Sonnet go by the account's week alone and keep using an account whose Fable week is spent.
