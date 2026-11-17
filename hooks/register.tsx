@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, McpToolResult, Register, SessionRateLimit, Timer } from 'claude-code'
 
-import type { Account, FooterStyle, Reading, RotateTo, SharedState, View } from '../types'
+import type { Account, FooterStyle, Reading, RotateTo, SharedState, View, Work } from '../types'
 import { VERSION, compareVersions } from '../coordinator/version'
 import {
   CHROME_SERVER,
@@ -27,6 +27,7 @@ import {
   windowPct,
 } from './model'
 import { Band, Footer, Pane } from './view'
+import { cdTarget, parseStatus, shortHint } from './work'
 import type { Actions } from './view'
 
 // Each session runs this mod. What every session shares (the logins, their usage
@@ -585,6 +586,85 @@ async function onStopFailure($: Host, error: string): Promise<void> {
   } else if (isConnectingChrome) isCutByVisit = true
 }
 
+// ---------------------------------------------------------------- the session's work
+// The footer names the branch the session works on. Sessions often start in one
+// checkout and work in a worktree of it, moving there with `cd` in their Bash
+// commands, either once (the Bash tool keeps the directory) or at the start of
+// every command: the last directory a command moved to in a repository is
+// where the work is, else the session's own.
+
+/** A burst of tool calls reads git once, this long after the first. */
+const WORK_DELAY_MS = 1_000
+/** The last directory in a repository a Bash command moved to. */
+let workDir: string | undefined
+/** The session's own directory when last read: a move of its own (a worktree it entered) starts over from there. */
+let lastCwd: string | undefined
+let workTimer: Timer | undefined
+let isReadingWork = false
+
+/** Git's output in `dir`, or undefined when it fails; it takes no optional locks, so the session's own git commands never meet its index.lock. */
+async function gitIn($: Host, dir: string, args: readonly string[]): Promise<string | undefined> {
+  const run = await $.process.run(['git', '--no-optional-locks', '-C', dir, ...args], { timeoutMs: 10_000 }).catch(() => undefined)
+  return run?.exitCode === 0 ? run.stdout : undefined
+}
+
+/** The branch in `dir`, what no remote has of it and whether anything is uncommitted; undefined outside a repository. */
+async function readWork($: Host, dir: string): Promise<Work | undefined> {
+  const status = await gitIn($, dir, ['status', '--porcelain=v2', '--branch'])
+  const parsed = status === undefined ? undefined : parseStatus(status)
+  if (parsed === undefined) return undefined
+  let unpushed = parsed.ahead
+  if (!parsed.hasUpstream) {
+    // A branch never pushed: its commits that no remote branch has.
+    const hasRemote = ((await gitIn($, dir, ['remote'])) ?? '').trim() !== ''
+    const count = hasRemote ? Number((await gitIn($, dir, ['rev-list', '--count', 'HEAD', '--not', '--remotes']))?.trim()) : NaN
+    unpushed = Number.isInteger(count) ? count : undefined
+  }
+  return { branch: parsed.branch, ...(unpushed === undefined ? {} : { unpushed }), isDirty: parsed.isDirty }
+}
+
+/** Where the work is: the last directory a Bash command moved to, unless the session itself moved since. */
+async function workDirectory($: Host): Promise<string | undefined> {
+  const cwd = await $.session.cwd().catch(() => undefined)
+  if (cwd !== lastCwd) {
+    lastCwd = cwd
+    workDir = undefined
+  }
+  return workDir ?? cwd
+}
+
+/** Reads the work again and keeps it in the view. */
+async function refreshWork($: Host): Promise<void> {
+  if (isReadingWork) return scheduleWork($)
+  isReadingWork = true
+  try {
+    const dir = await workDirectory($)
+    const work = dir === undefined ? undefined : await readWork($, dir)
+    const now = JSON.stringify(work)
+    if (now !== JSON.stringify((await getView($)).work)) await setView($, v => ({ ...v, work }))
+  } finally {
+    isReadingWork = false
+  }
+}
+
+/** Reads the work again soon: once for a burst of calls. */
+function scheduleWork($: Host): void {
+  if (workTimer !== undefined) return
+  workTimer = $.clock.after(WORK_DELAY_MS, () => {
+    workTimer = undefined
+    void refreshWork($).catch(error => debug($, `reading the branch failed: ${String(error)}`))
+  })
+}
+
+/** A Bash command ran: a `cd` in it into a repository moves the work there. */
+async function onBash($: Host, command: string): Promise<void> {
+  const home = (await $.env.get('HOME')) ?? '/'
+  const from = (await workDirectory($)) ?? home
+  const target = cdTarget(command, from, home)
+  if (target !== undefined && target !== workDir && (await readWork($, target)) !== undefined) workDir = target
+  scheduleWork($)
+}
+
 // ---------------------------------------------------------------- Claude in Chrome
 // The Chrome extension answers only connections made as the claude.ai account
 // it is signed in to. Claude in Chrome connects at its first call, as the login
@@ -954,6 +1034,9 @@ async function boot($: Host, isInteractive: boolean): Promise<void> {
   const pid = await sessionPid($)
   const cwd = await $.session.cwd().catch(() => undefined)
   await noteModel($)
+  const context = await $.session.usage().then(u => u.context.percent).catch(() => undefined)
+  if (context !== undefined) await setView($, v => ({ ...v, contextPct: context }))
+  void refreshWork($).catch(error => debug($, `reading the branch failed: ${String(error)}`))
   session = {
     key: `${sessionId ?? 'session'}:${pid ?? Math.random().toString(36).slice(2)}`,
     slot,
@@ -1005,10 +1088,36 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     turns.delete(e.turnId)
+    scheduleWork($)
     return next(e)
   })
 
+  // The footer's branch: a Bash command may move the work (`cd`), commit or push; a file edit leaves changes uncommitted.
+  on('tool.call', { tool: /^(Bash|Edit|MultiEdit|Write|NotebookEdit)$/ }, async ($, e, next) => {
+    const done = await next(e)
+    if (e.tool === 'Bash') void onBash($, e.command).catch(error => debug($, `reading the branch failed: ${String(error)}`))
+    else scheduleWork($)
+    return done
+  }).catch(($, e, next) => next(e))
+
+  // The footer names the model as soon as /model changes it.
+  on('command.run', { command: 'model' }, async ($, e, next) => {
+    const ran = await next(e)
+    void noteModel($).catch(error => debug($, `reading the model failed: ${String(error)}`))
+    return ran
+  }).catch(($, e, next) => next(e))
+
+  // The permission mode's words under the prompt, shortened: `⏵⏵ bypass permissions on (shift+tab to cycle)` as `⏵⏵ bypass`.
+  on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
+    const hint = shortHint(e.props.hint)
+    return next(hint === e.props.hint ? e : { ...e, props: { ...e.props, hint } })
+  })
+
   on('session.measure', async ($, e, next) => {
+    const contextPct = e.context.percent
+    if (e.changed.includes('context') && contextPct !== undefined) {
+      void setView($, v => ({ ...v, contextPct })).catch(error => debug($, `context failed: ${String(error)}`))
+    }
     if (e.changed.includes('rateLimits')) {
       void onMeasure($, e.rateLimits).catch(error => debug($, `measure failed: ${String(error)}`))
     }

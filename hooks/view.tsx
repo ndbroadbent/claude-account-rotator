@@ -25,6 +25,7 @@ import {
   untilText,
   viewScope,
 } from './model'
+import { CONTEXT_WARN_PCT, modelLabel, workText } from './work'
 
 export type Ui = Pick<Elements[RenderSurface], 'Box' | 'Text' | 'Button'>
 
@@ -197,6 +198,28 @@ const ROW_NAMES = ['Session:', 'Weekly:'] as const
  * left. A week row with nothing to show is left out; with both rows off, a
  * word keeps the control.
  */
+/**
+ * The session's own details left of the accounts, dim, joined by ` · `: its
+ * model, its branch (with `↑n` unpushed and `●` uncommitted) and how full its
+ * context is, warning from CONTEXT_WARN_PCT. On a narrow row the start is cut.
+ */
+function sessionDetails({ Text }: Ui, view: View) {
+  const parts: { key: string; text: string; color?: string }[] = [
+    ...(modelLabel(view.model) === undefined ? [] : [{ key: 'model', text: modelLabel(view.model)! }]),
+    ...(view.work === undefined ? [] : [{ key: 'branch', text: workText(view.work) }]),
+    ...(view.contextPct === undefined ? [] : [{ key: 'context', text: `ctx ${view.contextPct}%`, ...(view.contextPct >= CONTEXT_WARN_PCT ? { color: 'warning' } : {}) }]),
+  ]
+  if (parts.length === 0) return undefined
+  return (
+    <Text wrap="truncate-start">
+      {parts.flatMap((part, i) => [
+        ...(i > 0 ? [<Text dimColor>{' · '}</Text>] : []),
+        part.color === undefined ? <Text key={part.key} dimColor>{part.text}</Text> : <Text key={part.key} color={part.color}>{part.text}</Text>,
+      ])}
+    </Text>
+  )
+}
+
 export function Footer(ui: Ui, view: View, modes: readonly string[], now: number, act: Actions) {
   const { Box, Text, Button } = ui
   const { week, weekPercent } = view.footer
@@ -208,13 +231,19 @@ export function Footer(ui: Ui, view: View, modes: readonly string[], now: number
   const hasColumns = (row === 1 ? week : view.footer.session) !== 'none' && hasRoom
   const isShown = hasColumns || ((row === 1 ? weekPercent : view.footer.sessionPercent) && activeRoom(view, now, row) !== undefined)
   const shownRows = isShown ? [row] : []
+  const details = sessionDetails(ui, view)
   const rows = shownRows.map(r =>
     r === 1 ? footerRow(view, now, 1, week, weekPercent, hasColumns, true) : footerRow(view, now, 0, view.footer.session, view.footer.sessionPercent, hasColumns, true),
   )
   return (
     <Box flexDirection="row" columnGap={1}>
       {modes.length > 0 && <Text dimColor>{modes.join(' & ')}</Text>}
-      <Box key="accounts-area" flexDirection="row" columnGap={1}>
+      {details !== undefined && (
+        <Box key="details" flexShrink={1}>
+          {details}
+        </Box>
+      )}
+      <Box key="accounts-area" flexDirection="row" columnGap={1} flexShrink={0}>
         {rows.length > 0 && (
           <Box display="none" hover={{ display: 'flex' }} flexDirection="column" alignItems="flex-end">
             {shownRows.map(row => (

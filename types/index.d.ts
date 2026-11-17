@@ -133,6 +133,13 @@ export type SharedState = {
   signIn?: { accountId: string; since: number }
 }
 
+/**
+ * The git branch a session works on, where the footer shows it: `unpushed`, the
+ * commits no remote has (undefined in a repository with no remote); `isDirty`,
+ * changes not committed, untracked files included.
+ */
+export type Work = { branch: string; unpushed?: number; isDirty: boolean }
+
 /** Everything the footer, band and pane draw from. */
 export type View = {
   accounts: Account[]
@@ -148,6 +155,10 @@ export type View = {
   moveToFor?: Record<string, Record<string, string>>
   /** This session's model, as `/model` shows it: a model with its own week (Fable) also leaves a login once that week is spent. */
   model?: string
+  /** This session only: the branch it works on, in the directory its Bash commands last moved to (else its own); absent outside a repository. */
+  work?: Work
+  /** This session only: how full its context window is, 0 to 100, once a response reported it. */
+  contextPct?: number
   /** Logins being removed. */
   retiring?: string[]
   /** Live sessions on each login, every session counted. */

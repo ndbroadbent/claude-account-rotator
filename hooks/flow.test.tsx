@@ -78,6 +78,12 @@ type World = {
   commands: string[]
   /** The coordinator the session reaches over its socket: one process, in memory. */
   coordinator?: Coordinator
+  /** git repositories by directory: `git status --porcelain=v2 --branch`'s output, the remotes, the commits no remote has. */
+  repos?: Record<string, { status: string; remote?: string; unpushed?: number }>
+  /** The session's own directory, where not /work. */
+  cwd?: string
+  /** How full the session's context is, as `$.session.usage()` answers. */
+  contextPct?: number
 }
 
 /** Claude Code's words for a browser call that found no browser, as a session moved off its login gets them. */
@@ -235,6 +241,14 @@ function world(on: On, w: World, store: Record<string, unknown>): MockClock {
   })
   on('process.run', (_$, e) => {
     if (e.argv[0] === '/bin/sh') return { value: ran(0, `${PID}\n`) }
+    if (e.argv[0] === 'git' && e.argv[1] === '--no-optional-locks' && e.argv[2] === '-C') {
+      const repo = w.repos?.[e.argv[3] ?? '']
+      if (repo === undefined) return { value: { ...ran(128, ''), stderr: 'fatal: not a git repository' } }
+      const verb = e.argv[4]
+      if (verb === 'status') return { value: ran(0, repo.status) }
+      if (verb === 'remote') return { value: ran(0, repo.remote ?? '') }
+      if (verb === 'rev-list') return { value: ran(0, `${repo.unpushed ?? 0}\n`) }
+    }
     throw new Error(`unexpected command: ${e.argv.join(' ')}`)
   })
   on('http.fetch', async (_$, e) => {
@@ -286,7 +300,9 @@ function world(on: On, w: World, store: Record<string, unknown>): MockClock {
   on('session.id', () => ({ value: 'session-1' }))
   on('session.model', () => ({ value: w.model ?? 'claude-opus-5-5' }))
   on('tool.check', () => ({ decision: 'allow' as const }))
-  on('session.usage', () => ({ value: { startedAt: NOW, context: { window: 200_000 }, rateLimits: w.limits } }))
+  on('session.usage', () => ({ value: { startedAt: NOW, context: { window: 200_000, ...(w.contextPct === undefined ? {} : { percent: w.contextPct }) }, rateLimits: w.limits } }))
+  on('session.cwd', () => ({ value: w.cwd ?? '/work' }))
+  on('tool.call', { tool: /^(Bash|Edit|Write)$/ }, () => ({ result: 'done', text: 'done' }))
   on('session.measure', (_$, e) => ({ changed: e.changed }))
   on('turn.start', (_$, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
@@ -365,7 +381,7 @@ test('a login with nothing in the keychain shows as needing a sign-in, with one 
       plugin: 'account-rotator',
       surface,
       component: 'AbovePrompt',
-      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 9 }, view: {} },
+      props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 9 }, view: {} },
     })
     expect(await band.find({ text: /account 2 \(two@example.com\) needs a sign-in \(not signed in\)/ })).toBeDefined()
     expect(await band.find({ key: 'sign-in-all' })).toBeDefined()
@@ -430,7 +446,7 @@ test('on Linux a login whose file is missing, holds no Claude login, cannot be r
     plugin: 'account-rotator',
     surface: 'terminal',
     component: 'AbovePrompt',
-    props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 9 }, view: {} },
+    props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 9 }, view: {} },
   })
   const names = /account 2 \(two@example.com\), 3 \(3@example.com\), 4 \(4@example.com\), 5 \(5@example.com\) needs a sign-in \(not signed in\)\./
   expect(await band.find({ text: names })).toBeDefined()
@@ -455,7 +471,7 @@ test('on Linux the band\'s Sign in reads the new login from the file the browser
     plugin: 'account-rotator',
     surface: 'terminal',
     component: 'AbovePrompt',
-    props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 9 }, view: {} },
+    props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 9 }, view: {} },
   })
   await band.press({ key: 'sign-in-all' })
   await clock.settle()
@@ -501,7 +517,7 @@ test('the band\'s Sign in signs a locked login in through the browser, in its ow
     plugin: 'account-rotator',
     surface: 'terminal',
     component: 'AbovePrompt',
-    props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 9 }, view: {} },
+    props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 9 }, view: {} },
   })
   await band.press({ key: 'sign-in-all' })
   await clock.settle()
@@ -927,7 +943,7 @@ test('a /login in a session on login 3 that signs in login 2\'s account leaves 3
   w.owners['tok-2b'] = 'two@example.com'
   await $.command.run(LOGIN)
   await clock.settle()
-  const band = await $.ui.mount({ plugin: 'account-rotator', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 9 }, view: {} } })
+  const band = await $.ui.mount({ plugin: 'account-rotator', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 9 }, view: {} } })
   expect(await band.find({ text: /account 3 \(three@example.com\) needs a sign-in \(signed in as account 2 now\)/ })).toBeDefined()
   await band.unmount()
   // The session moves off it, to the login the rotation picks: 2, with the most room.
@@ -1053,7 +1069,7 @@ test('a view kept from the code before a hot reload, which lacks what this code 
   await pane.unmount()
 })
 
-const BAND_PROPS = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, scroll: { offset: 0, bodyRows: 9 }, view: {} } as const
+const BAND_PROPS = { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 160, scroll: { offset: 0, bodyRows: 9 }, view: {} } as const
 
 /**
  * A call to one of Claude in Chrome's tools, as Claude makes one: its input
@@ -1830,4 +1846,109 @@ test('a response keeps the Fable week the coordinator read, and the pane shows i
   expect(await pane.find({ text: /40% left/ })).toBeDefined()
   expect(await pane.find({ text: /59% left/ })).toBeDefined()
   await pane.unmount()
+})
+
+// ---------------------------------------------------------------- the session's details in the footer
+
+const MAIN_STATUS = '# branch.oid abc\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +0 -0\n'
+const STORY_STATUS = '# branch.oid def\n# branch.head nathan/sc-6450/least-privilege-ci-oidc\n# branch.upstream origin/nathan/sc-6450/least-privilege-ci-oidc\n# branch.ab +2 -0\n1 .M N... 100644 100644 100644 a b hooks/view.tsx\n'
+const NEW_STATUS = '# branch.oid fed\n# branch.head nathan/sc-7000/new-thing\n'
+
+const mountFooter = ($: Engine) => $.ui.mount({ plugin: 'account-rotator', surface: 'terminal', component: 'SessionMode', props: { modes: [] } })
+const details = async (footer: Awaited<ReturnType<typeof mountFooter>>) => (await footer.find({ key: 'details' }))?.text
+
+test('left of the accounts the footer names the model, the branch with what is unpushed and uncommitted, and how full the context is', async ($, on) => {
+  const w = fresh()
+  w.keychain['Claude Code-credentials'] = blob('tok-1')
+  w.usage['tok-1'] = [20, 30]
+  w.model = 'claude-fable-5-2'
+  w.contextPct = 72
+  w.repos = { '/work': { status: STORY_STATUS, remote: 'origin\n' } }
+  const clock = world(on, w, TWO_LOGINS)
+  await start($, clock)
+  const footer = await mountFooter($)
+  expect(await details(footer)).toBe('Fable 5.2 · sc-6450 least-privilege-ci-oidc ↑2 ● · ctx 72%')
+  await footer.unmount()
+})
+
+test('a branch never pushed counts the commits no remote has; outside a repository the footer names no branch', async ($, on) => {
+  const w = fresh()
+  w.keychain['Claude Code-credentials'] = blob('tok-1')
+  w.usage['tok-1'] = [20, 30]
+  w.repos = { '/work': { status: NEW_STATUS, remote: 'origin\n', unpushed: 3 } }
+  const clock = world(on, w, TWO_LOGINS)
+  await start($, clock)
+  const footer = await mountFooter($)
+  expect(await details(footer)).toBe('Opus 5.5 · sc-7000 new-thing ↑3')
+  await footer.unmount()
+})
+
+test('the branch follows the worktree a Bash command moves to, prefixed to a command or on its own; a cd in a subshell or out of a repository leaves it', async ($, on) => {
+  const w = fresh()
+  w.keychain['Claude Code-credentials'] = blob('tok-1')
+  w.usage['tok-1'] = [20, 30]
+  w.repos = {
+    '/work': { status: MAIN_STATUS, remote: 'origin\n' },
+    '/work/.worktrees/sc-6450': { status: STORY_STATUS, remote: 'origin\n' },
+  }
+  const clock = world(on, w, TWO_LOGINS)
+  await start($, clock)
+  const footer = await mountFooter($)
+  expect(await details(footer)).toBe('Opus 5.5 · main')
+  await $.tool.call({ tool: 'Bash', command: '(cd .worktrees/sc-6450 && git status)' })
+  await clock.advance(2_000)
+  expect(await details(footer)).toBe('Opus 5.5 · main')
+  await $.tool.call({ tool: 'Bash', command: 'cd .worktrees/sc-6450 && git status' })
+  await clock.advance(2_000)
+  expect(await details(footer)).toBe('Opus 5.5 · sc-6450 least-privilege-ci-oidc ↑2 ●')
+  // The Bash tool keeps the directory: a command with no cd stays there, and a cd to a scratch folder doesn't move the work.
+  await $.tool.call({ tool: 'Bash', command: 'git log -1' })
+  await $.tool.call({ tool: 'Bash', command: 'cd /tmp' })
+  await clock.advance(2_000)
+  expect(await details(footer)).toBe('Opus 5.5 · sc-6450 least-privilege-ci-oidc ↑2 ●')
+  // A commit and a push, as git then reports them.
+  w.repos['/work/.worktrees/sc-6450']!.status = STORY_STATUS.replace('+2 -0', '+0 -0').replace(/^1 .*\n/m, '')
+  await $.tool.call({ tool: 'Bash', command: 'cd /work/.worktrees/sc-6450 && git commit -am x && git push' })
+  await clock.advance(2_000)
+  expect(await details(footer)).toBe('Opus 5.5 · sc-6450 least-privilege-ci-oidc')
+  await footer.unmount()
+})
+
+test('the footer names the model /model picks as soon as it runs, and the context as each response fills it', async ($, on) => {
+  const w = fresh()
+  w.keychain['Claude Code-credentials'] = blob('tok-1')
+  w.usage['tok-1'] = [20, 30]
+  const clock = world(on, w, TWO_LOGINS)
+  on('command.run', { command: 'model' }, () => ({ text: 'Set model to Fable 5.2' }))
+  await start($, clock)
+  const footer = await mountFooter($)
+  expect(await details(footer)).toBe('Opus 5.5')
+  w.model = 'claude-fable-5-2[1m]'
+  await $.command.run({ command: 'model', args: 'fable', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
+  await clock.settle()
+  expect(await details(footer)).toBe('Fable 5.2 1M')
+  await $.session.measure({ context: { window: 1_000_000, tokens: 850_000, percent: 85 }, rateLimits: [], changed: ['context'] })
+  await clock.settle()
+  expect(await details(footer)).toBe('Fable 5.2 1M · ctx 85%')
+  expect(painted(await footer.find({ key: 'details' }))).toEqual([expect.objectContaining({ color: 'warning' })])
+  await footer.unmount()
+})
+
+test('the hint under the prompt names the permission mode in a word or two', async ($, on) => {
+  const w = fresh()
+  const clock = world(on, w, TWO_LOGINS)
+  on('ui.render', { component: 'PromptHint' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text key="hint">{e.props.hint}</Text>
+  })
+  await start($, clock)
+  for (const [hint, short] of [
+    ['⏵⏵ bypass permissions on (shift+tab to cycle)', '⏵⏵ bypass'],
+    ['⏵⏵ accept edits on (shift+tab to cycle) · esc to interrupt', '⏵⏵ accept edits · esc to interrupt'],
+    ['? for shortcuts', '? for shortcuts'],
+  ] as const) {
+    const line = await $.ui.mount({ plugin: 'account-rotator', surface: 'terminal', component: 'PromptHint', props: { isDraft: false, isWorking: false, hint } })
+    expect((await line.find({ type: 'Text' }))?.text).toBe(short)
+    await line.unmount()
+  }
 })

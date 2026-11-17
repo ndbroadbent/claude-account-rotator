@@ -2,6 +2,11 @@
 
 What each version of the account rotator changed. To get each one as Claude Code starts, turn on auto-update: in `/plugin`, open **Marketplaces**, pick **claude-account-rotator** and choose **Enable auto-update**. To update by hand, run `claude plugin marketplace update claude-account-rotator`, then `claude plugin update account-rotator@claude-account-rotator`, and start a new session.
 
+## 0.6.2 - 2026-11-18
+
+- **The footer names the session's model, branch and context** left of the accounts: `Fable 5.2 · sc-6450 least-privilege-ci-oidc ↑2 ● · ctx 72%`. The model changes as soon as `/model` picks another. The branch is read in the directory the session's Bash commands last moved to with `cd` (into a repository), so a session that started in one checkout and works in a worktree shows the worktree's branch; a `cd` in a subshell, or to a folder outside any repository, doesn't move it. `↑n` counts the commits no remote has, `●` shows uncommitted changes, and git runs without optional locks so it never holds the session's own `index.lock`. The context figure turns yellow from 80%.
+- **The permission mode under the prompt is shortened:** `⏵⏵ bypass permissions on (shift+tab to cycle)` shows as `⏵⏵ bypass`, `⏵⏵ accept edits on (shift+tab to cycle)` as `⏵⏵ accept edits`.
+
 ## 0.6.1 - 2026-11-14
 
 - **An idle session whose switch hasn't been confirmed moves on with the rotation.** A switch waits for a response to confirm it, and the rotation used to leave a session alone until then. An idle session has no new response, so one the rotation moved to the account resetting soonest stayed there after that account reset, sometimes for days, until its next turn ran on it. The rotation now moves such a session on as it would any other, except while a turn is running (its response may be on the way) or when you picked the account with **Use now**, which stays until a response confirms it.
