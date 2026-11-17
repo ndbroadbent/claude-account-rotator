@@ -1933,22 +1933,3 @@ test('the footer names the model /model picks as soon as it runs, and the contex
   expect(painted(await footer.find({ key: 'details' }))).toEqual([expect.objectContaining({ color: 'warning' })])
   await footer.unmount()
 })
-
-test('the hint under the prompt names the permission mode in a word or two', async ($, on) => {
-  const w = fresh()
-  const clock = world(on, w, TWO_LOGINS)
-  on('ui.render', { component: 'PromptHint' }, ($, e) => {
-    const { Text } = $.ui.resolve(e)
-    return <Text key="hint">{e.props.hint}</Text>
-  })
-  await start($, clock)
-  for (const [hint, short] of [
-    ['⏵⏵ bypass permissions on (shift+tab to cycle)', '⏵⏵ bypass'],
-    ['⏵⏵ accept edits on (shift+tab to cycle) · esc to interrupt', '⏵⏵ accept edits · esc to interrupt'],
-    ['? for shortcuts', '? for shortcuts'],
-  ] as const) {
-    const line = await $.ui.mount({ plugin: 'account-rotator', surface: 'terminal', component: 'PromptHint', props: { isDraft: false, isWorking: false, hint } })
-    expect((await line.find({ type: 'Text' }))?.text).toBe(short)
-    await line.unmount()
-  }
-})

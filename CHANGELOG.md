@@ -2,6 +2,10 @@
 
 What each version of the account rotator changed. To get each one as Claude Code starts, turn on auto-update: in `/plugin`, open **Marketplaces**, pick **claude-account-rotator** and choose **Enable auto-update**. To update by hand, run `claude plugin marketplace update claude-account-rotator`, then `claude plugin update account-rotator@claude-account-rotator`, and start a new session.
 
+## 0.6.3 - 2026-11-18
+
+- **The permission mode under the prompt is back as Claude Code draws it.** 0.6.2's shortened version replaced the whole hint line, which dropped parts of it, such as what sat between its dots.
+
 ## 0.6.2 - 2026-11-18
 
 - **The footer names the session's model, branch and context** left of the accounts: `Fable 5.2 · sc-6450 least-privilege-ci-oidc ↑2 ● · ctx 72%`. The model changes as soon as `/model` picks another. The branch is read in the directory the session's Bash commands last moved to with `cd` (into a repository), so a session that started in one checkout and works in a worktree shows the worktree's branch; a `cd` in a subshell, or to a folder outside any repository, doesn't move it. `↑n` counts the commits no remote has, `●` shows uncommitted changes, and git runs without optional locks so it never holds the session's own `index.lock`. The context figure turns yellow from 80%.

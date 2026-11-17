@@ -27,7 +27,7 @@ import {
   windowPct,
 } from './model'
 import { Band, Footer, Pane } from './view'
-import { cdTarget, parseStatus, shortHint } from './work'
+import { cdTarget, parseStatus } from './work'
 import type { Actions } from './view'
 
 // Each session runs this mod. What every session shares (the logins, their usage
@@ -1106,12 +1106,6 @@ export const register: Register = on => {
     void noteModel($).catch(error => debug($, `reading the model failed: ${String(error)}`))
     return ran
   }).catch(($, e, next) => next(e))
-
-  // The permission mode's words under the prompt, shortened: `⏵⏵ bypass permissions on (shift+tab to cycle)` as `⏵⏵ bypass`.
-  on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
-    const hint = shortHint(e.props.hint)
-    return next(hint === e.props.hint ? e : { ...e, props: { ...e.props, hint } })
-  })
 
   on('session.measure', async ($, e, next) => {
     const contextPct = e.context.percent

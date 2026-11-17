@@ -97,16 +97,3 @@ export function workText(work: Work): string {
 
 /** From this full, the context's figure turns the theme's warning color. */
 export const CONTEXT_WARN_PCT = 80
-
-/**
- * Claude Code's permission mode as the hint line under the prompt names it,
- * shortened: `⏵⏵ bypass permissions on (shift+tab to cycle)` as `⏵⏵ bypass`,
- * `⏵⏵ accept edits on (shift+tab to cycle)` as `⏵⏵ accept edits`. The rest of
- * the line stays.
- */
-export function shortHint(hint: string): string {
-  return hint
-    .replace(/ permissions on(?= \(shift\+tab to cycle\)|\s*$| ·)/, '')
-    .replace(/ on(?= \(shift\+tab to cycle\))/, '')
-    .replace(/\s*\(shift\+tab to cycle\)/, '')
-}

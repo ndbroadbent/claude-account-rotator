@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { branchLabel, cdTarget, modelLabel, parseStatus, resolvePath, shortHint, workText } from './work'
+import { branchLabel, cdTarget, modelLabel, parseStatus, resolvePath, workText } from './work'
 
 test('models are named as people say them', () => {
   expect(modelLabel('claude-fable-5-2')).toBe('Fable 5.2')
@@ -39,12 +39,4 @@ test('git status gives the branch, how far ahead it is and whether anything is u
   expect(parseStatus('fatal: not a git repository')).toBeUndefined()
   expect(workText({ branch: 'main', unpushed: 0, isDirty: false })).toBe('main')
   expect(workText({ branch: 'nathan/sc-1/x', unpushed: 4, isDirty: true })).toBe('sc-1 x ↑4 ●')
-})
-
-test('the permission mode is shortened and the rest of the hint kept', () => {
-  expect(shortHint('⏵⏵ bypass permissions on (shift+tab to cycle)')).toBe('⏵⏵ bypass')
-  expect(shortHint('⏵⏵ accept edits on (shift+tab to cycle)')).toBe('⏵⏵ accept edits')
-  expect(shortHint('⏸ plan mode on (shift+tab to cycle) · esc to interrupt')).toBe('⏸ plan mode · esc to interrupt')
-  expect(shortHint('⏵⏵ bypass permissions on · 2 shells')).toBe('⏵⏵ bypass · 2 shells')
-  expect(shortHint('? for shortcuts')).toBe('? for shortcuts')
 })
