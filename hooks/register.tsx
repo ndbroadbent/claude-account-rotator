@@ -1062,6 +1062,8 @@ async function boot($: Host, isInteractive: boolean): Promise<void> {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
+    // The coordinator's own `claude -p /usage` run, which only refreshes a login's token: no session to join or move.
+    if ((await $.env.get('CLAUDE_ACCOUNT_ROTATOR_REFRESH')) === '1') return started
     void boot($, e.isInteractive).catch(error => debug($, `start failed: ${String(error)}`))
     void $.ui.panes().then(panes => {
       isPaneShown = panes.some(p => p.id === PANE && p.isShown)

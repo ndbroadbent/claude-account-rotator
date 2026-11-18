@@ -57,6 +57,8 @@ export const STALE_SESSION_MS = 10 * 60_000
 /** After a failed usage call (a 429, an outage), how long before the next: doubling with each failure, up to the most. */
 export const BACKOFF_MS = 2 * 60_000
 export const MAX_BACKOFF_MS = 15 * 60_000
+/** After Claude Code failed to refresh a login's expired token, the coordinator tries again this long after. */
+export const REFRESH_RETRY_MS = 10 * 60_000
 /** The longest a long poll waits. */
 export const MAX_WAIT_MS = 55_000
 const NOTICE_KEEP = 20
@@ -87,6 +89,12 @@ export type Deps = {
   fetchProfile: (accessToken: string) => Promise<unknown>
   /** Who a slot is signed in as, from `claude auth status --json`. */
   authStatus: (slot: string) => Promise<Identity | undefined>
+  /**
+   * Has Claude Code refresh a slot's expired access token and save it where it
+   * keeps the sign-in (`claude -p /usage` as that login, no model request);
+   * whether the run succeeded.
+   */
+  refreshToken: (slot: string) => Promise<boolean>
   signIn: (slot: string, email: string | undefined) => SignInRun
   signOut: (slot: string) => Promise<void>
   /** Makes a new login's directory and answers its path. */
@@ -147,6 +155,8 @@ export class Coordinator {
   private health: Record<string, Health> = {}
   private holders: Record<string, Holder> = {}
   private expiresAt: Record<string, number> = {}
+  /** When the coordinator last had Claude Code refresh each login's expired token. */
+  private refreshTriedAt: Record<string, number> = {}
   private readonly retiring = new Set<string>()
   private settings: Persisted['settings'] = { rotateTo: DEFAULT_ROTATE_TO, footer: DEFAULT_FOOTER }
   private chrome: Persisted['chrome'] = { accountIds: [] }
@@ -410,6 +420,22 @@ export class Coordinator {
     await run
   }
 
+  /**
+   * Whether to have Claude Code refresh a login's expired access token: only
+   * Claude Code refreshes one, as a session sends a request, so a login no
+   * session is on keeps an expired token, and the coordinator can't read its
+   * usage to see its windows reset. Never while a session is on it (its own
+   * refresh could race this one), and a failed try waits REFRESH_RETRY_MS.
+   */
+  private wantsRefresh(id: string, credential: Credential, usage: 'poll' | 'fresh', now: number): boolean {
+    return (
+      credential.expiresAt <= now + 60_000 &&
+      this.sessionCount(id) === 0 &&
+      this.wantsUsage(id, usage, now) &&
+      now - (this.refreshTriedAt[id] ?? -Infinity) >= REFRESH_RETRY_MS
+    )
+  }
+
   private wantsUsage(id: string, usage: 'poll' | 'fresh', now: number): boolean {
     const most = usage === 'fresh' ? FRESH_MS : POLL_MS
     const readAt = this.readings[id]?.at ?? 0
@@ -437,7 +463,14 @@ export class Coordinator {
       return
     }
     this.unreadable.delete(id)
-    const credential = stored.state === 'present' ? stored.credential : undefined
+    let credential = stored.state === 'present' ? stored.credential : undefined
+    if (credential !== undefined && healthOf(credential, now).kind === 'ok' && this.wantsRefresh(id, credential, usage, now)) {
+      this.refreshTriedAt[id] = now
+      if (!(await this.deps.refreshToken(account.slot))) this.deps.log(`account ${id}: Claude Code could not refresh its expired sign-in`)
+      const again = await this.deps.readStored(account.slot)
+      if (this.find(id) === undefined) return
+      if (again.state === 'present' && again.credential !== undefined) credential = again.credential
+    }
     this.setExpiry(id, credential?.expiresAt)
     let health = healthOf(credential, now)
     if (health.kind === 'ok' && credential !== undefined) {

@@ -59,9 +59,9 @@ export function makeLogger(file = logPath()): (text: string) => void {
   }
 }
 
-function run(cmd: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number): Promise<{ code: number; stdout: string; stderr: string }> {
+function run(cmd: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number, cwd?: string): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise(resolve => {
-    execFile(cmd, args, { env, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
+    execFile(cmd, args, { env, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, ...(cwd === undefined ? {} : { cwd }) }, (error, stdout, stderr) => {
       const code = error === null ? 0 : typeof error.code === 'number' ? error.code : -1
       resolve({ code, stdout: String(stdout), stderr: String(stderr) })
     })
@@ -142,6 +142,20 @@ export function nodeDeps(dir: string, log: (text: string) => void): Deps {
     async authStatus(slot) {
       const { code, stdout } = await run('claude', ['auth', 'status', '--json'], { ...env, ...slotEnv(slot) }, 20_000)
       return code === 0 ? identityFromStatus(stdout) : undefined
+    },
+    async refreshToken(slot) {
+      // `/usage` runs in Claude Code itself, with no model request: reading usage refreshes an expired token first and
+      // saves it where the login is kept. No MCP servers, no session file; the account-rotator mod in that run stays out
+      // (CLAUDE_ACCOUNT_ROTATOR_REFRESH), so it neither registers a session nor moves the run to another login.
+      const { code, stdout, stderr } = await run(
+        'claude',
+        ['-p', '/usage', '--strict-mcp-config', '--no-session-persistence'],
+        { ...env, ...slotEnv(slot), CLAUDE_ACCOUNT_ROTATOR_REFRESH: '1' },
+        90_000,
+        os.tmpdir(),
+      )
+      if (code !== 0) log(`refresh run for ${slot || 'the normal login'} exited ${code}: ${stderr.trim().slice(0, 200)}`)
+      return code === 0 && /used/.test(stdout)
     },
     signIn(slot, email): SignInRun {
       const child = spawn('claude', ['auth', 'login', '--claudeai', ...(email ? ['--email', email] : [])], {

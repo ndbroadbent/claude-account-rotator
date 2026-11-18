@@ -212,6 +212,10 @@ function coordinatorIn(w: World, clock: MockClock, store: Record<string, unknown
       return { done, cancel: () => undefined }
     },
     async signOut() {},
+    // Each test's tokens outlive it: a refresh never comes up.
+    async refreshToken() {
+      return false
+    },
     async makeSlot(id) {
       return `${HOME}/.claude/accounts/${id}`
     },

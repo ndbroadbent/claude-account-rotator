@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
 import type { Persisted, SignInRun, Stored, UsageAnswer } from './core.ts'
-import { BACKOFF_MS, Coordinator, FRESH_MS, MAX_WAIT_MS, POLL_MS, STALE_SESSION_MS, TICK_MS } from './core.ts'
+import { BACKOFF_MS, Coordinator, FRESH_MS, MAX_WAIT_MS, POLL_MS, REFRESH_RETRY_MS, STALE_SESSION_MS, TICK_MS } from './core.ts'
 import { retryAfter } from './server.ts'
 import type { Identity } from '../hooks/model.ts'
 
@@ -44,6 +44,9 @@ class World {
   alive = new Set<number>()
   saved: Persisted | undefined
   logs: string[] = []
+  /** Slots Claude Code was asked to refresh, and the token a refresh saves to each (none: the refresh fails). */
+  refreshes: string[] = []
+  refreshTo: Record<string, string> = {}
 
   deps() {
     return {
@@ -76,6 +79,13 @@ class World {
           : { account: { email }, organization: { uuid: `org-${email}`, name: 'Org', rate_limit_tier: this.tiers[token] ?? 'default_claude_max_20x' } }
       },
       authStatus: async (slot: string) => this.status[slot],
+      refreshToken: async (slot: string) => {
+        this.refreshes.push(slot)
+        const token = this.refreshTo[slot]
+        if (token === undefined) return false
+        this.stored[slot] = blob(token, this.now + 8 * HOUR)
+        return true
+      },
       signIn: (slot: string, email: string | undefined): SignInRun => {
         let finish: (code: number | null, errors?: string) => void = () => undefined
         const done = new Promise<{ code: number | null; errors: string }>(resolve => {
@@ -220,6 +230,54 @@ describe('polling', () => {
     await w.advance(TICK_MS)
     assert.equal(c.state().notices.filter(n => n.text.includes('keychain')).length, 1)
     assert.equal(account(c, '2').health.kind, 'ok')
+  })
+})
+
+describe('expired sign-ins', () => {
+  test('a login no session is on whose token expired has Claude Code refresh it, so its usage is still read', async () => {
+    const w = new World()
+    const persisted = threeLogins(w)
+    w.stored[SLOT3] = blob('t3-old', NOW - HOUR)
+    w.refreshTo[SLOT3] = 't3'
+    const c = await started(w, persisted)
+    assert.deepEqual(w.refreshes, [SLOT3])
+    assert.ok(w.usageCalls.includes('t3'), 'read with the refreshed token')
+    assert.ok(!w.usageCalls.includes('t3-old'))
+    assert.equal(account(c, '3').reading?.sevenDay?.pct, 70)
+    assert.equal(account(c, '3').health.kind, 'ok')
+    // The refreshed token lasts: no refresh at the next polls.
+    await w.advance(2 * POLL_MS + TICK_MS)
+    assert.deepEqual(w.refreshes, [SLOT3])
+  })
+
+  test('a login a session is on is left for that session to refresh', async () => {
+    const w = new World()
+    const persisted = threeLogins(w)
+    w.stored[SLOT3] = blob('t3-old', NOW - HOUR)
+    w.refreshTo[SLOT3] = 't3'
+    const c = await started(w, persisted)
+    w.refreshes = []
+    w.stored[SLOT2] = blob('t2-old', w.now - HOUR)
+    w.refreshTo[SLOT2] = 't2'
+    c.register({ id: 's1', slot: SLOT2, isInteractive: true })
+    await w.advance(POLL_MS + TICK_MS)
+    assert.deepEqual(w.refreshes, [])
+    assert.ok(!w.usageCalls.includes('t2-old'), 'an expired token is never sent')
+  })
+
+  test('a refresh that fails is logged and tried again only after a while', async () => {
+    const w = new World()
+    const persisted = threeLogins(w)
+    w.stored[SLOT3] = blob('t3-old', NOW - HOUR)
+    const c = await started(w, persisted)
+    assert.deepEqual(w.refreshes, [SLOT3])
+    assert.ok(w.logs.some(l => l.includes('account 3: Claude Code could not refresh')))
+    await w.advance(POLL_MS + TICK_MS)
+    assert.deepEqual(w.refreshes, [SLOT3], 'not at the next poll')
+    w.refreshTo[SLOT3] = 't3'
+    await w.advance(REFRESH_RETRY_MS)
+    assert.deepEqual(w.refreshes, [SLOT3, SLOT3])
+    assert.equal(account(c, '3').reading?.sevenDay?.pct, 70)
   })
 })
 

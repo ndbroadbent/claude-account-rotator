@@ -54,6 +54,7 @@ Click it for the panel: each account's usage and reset times, **Sign in**, **Use
 Every session talks to one coordinator process over a Unix socket, `~/.claude/account-rotator/coordinator.sock`. The coordinator:
 
 - reads each account's sign-in and polls its usage once for all sessions: an account's usage at most every 5 minutes, and less while sessions on it report the usage their responses carry;
+- keeps reading the usage of an account no session is on: only Claude Code refreshes an account's sign-in, as a session sends a request, so once such an account's token expires the coordinator runs `claude -p /usage` as that account, which refreshes it without a model request (an account with sessions on it is left to them);
 - tells every session about each change as it happens (a long poll), so the footers stay in step;
 - says where sessions on a spent account go, runs browser sign-ins one at a time, and keeps the settings and the Chrome account;
 - knows which sessions are on which account: the panel shows the count beside each account;
