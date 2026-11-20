@@ -2,6 +2,11 @@
 
 What each version of the account rotator changed. To get each one as Claude Code starts, turn on auto-update: in `/plugin`, open **Marketplaces**, pick **claude-account-rotator** and choose **Enable auto-update**. To update by hand, run `claude plugin marketplace update claude-account-rotator`, then `claude plugin update account-rotator@claude-account-rotator`, and start a new session.
 
+## 0.6.5 - 2026-11-20
+
+- **The menu bar app installs to /Applications**, where Spotlight, Launchpad and Finder's Applications folder show it, so you can start it again if it stops. `menubar/install.sh` deletes the copy earlier versions put in `~/Applications`, and `uninstall.sh` removes either.
+- The install and uninstall scripts quit the running app by its bundle ID instead of with `pkill`.
+
 ## 0.6.4 - 2026-11-18
 
 - **Accounts no session is on keep their usage current.** The coordinator reads usage with each account's own access token, and only Claude Code refreshes that token, as a session sends a request. An account the rotation had left kept its expired token, so its last reading stayed on screen for days: one that had hit its 5-hour limit showed 100% long after the window reset, counted as spent, and the rotation never sent a session there to refresh it, so its whole week went unused. Now, once the token of an account no session is on has expired, the coordinator runs `claude -p /usage` as that account. Claude Code refreshes the token and saves it as it would in a session, with no model request, and the coordinator reads the account's usage again. An account with sessions on it is left to them, and a refresh that fails is tried again 10 minutes later.

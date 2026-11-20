@@ -75,7 +75,7 @@ That copies the coordinator to `~/.claude/account-rotator/app`, so a plugin upda
 `menubar/` holds a small macOS menu bar app that reads the coordinator. The menu bar shows your combined weekly usage across every account, with ⚠ while an account needs a sign-in. An account whose plan still has a 5-hour window (as of November 2026, the $100 Max plan; Ultra, formerly Max 20x, dropped it) shows it on its own row in the panel, never in the menu bar. Each account counts by the size of its plan, as Anthropic sizes their weeks: an Ultra account (10x Pro) counts twice a Max one (5x Pro). Click it for each account's usage and reset times, **Sign in**, the rotation setting, the sessions by folder and the recent notices. A gear menu switches between used and left.
 
 ```
-menubar/install.sh      # builds it, copies it to ~/Applications and starts it at login
+menubar/install.sh      # builds it, copies it to /Applications and starts it at login
 menubar/uninstall.sh
 ```
 
