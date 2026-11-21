@@ -2,6 +2,16 @@
 
 What each version of the account rotator changed. To get each one as Claude Code starts, turn on auto-update: in `/plugin`, open **Marketplaces**, pick **claude-account-rotator** and choose **Enable auto-update**. To update by hand, run `claude plugin marketplace update claude-account-rotator`, then `claude plugin update account-rotator@claude-account-rotator`, and start a new session.
 
+## 0.6.6 - 2026-11-21
+
+Fixes ported from upstream (ivokund/claude-account-rotator 0.3.1 to 0.5.1), reworked for the coordinator:
+
+- **A limit hit just after a switch isn't blamed on the new account.** For up to 30 s Claude Code still sends the sign-in it read before, so the session checks both accounts' usage, and while the new one can serve it carries on once the switch lands (upstream b90ff1b).
+- **A switch is given up on only after a request has tested it.** A late response to a request sent before the switch could land no longer sends the session back, and giving up leaves alone a switch made since (upstream 5986448).
+- **A Use now pick stays the person's.** Held back by the refresh guard, it's the switch made once the guard lifts, not the rotation's; Connect goes back to it; and a browser answering on it doesn't hand it to the rotation before a request confirms it (upstream fc186dd).
+- **A switch Claude Code holds back, answering why, counts as refused,** as in a session that takes its settings from its organization: the session says once that it can't switch, instead of showing a switch that never happened (upstream 2e37b86).
+- **A new session's first move waits while its login's token has run out,** as overnight, until its first request refreshes the token there. Moving first could have the refreshed token saved over the other account's sign-in (upstream feb38e2).
+
 ## 0.6.5 - 2026-11-20
 
 - **The menu bar app installs to /Applications**, where Spotlight, Launchpad and Finder's Applications folder show it, so you can start it again if it stops. `menubar/install.sh` deletes the copy earlier versions put in `~/Applications`, and `uninstall.sh` removes either.

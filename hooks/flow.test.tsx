@@ -65,6 +65,8 @@ type World = {
   env: Record<string, string>
   /** Claude Code's security policy refuses every switch, as in a session on a Team seat. */
   refuseEnv?: boolean
+  /** Claude Code itself holds every switch back, answering why, as in a session that takes its settings from its organization. */
+  holdsEnv?: boolean
   /**
    * Claude in Chrome, where the session has it: the slots of the accounts a
    * Chrome extension is signed in to, one per Chrome profile, and the slot its
@@ -237,6 +239,7 @@ function world(on: On, w: World, store: Record<string, unknown>): MockClock {
   let slot = w.env.CLAUDE_SECURESTORAGE_CONFIG_DIR ?? ''
   on('env.set', (_$, e) => {
     if (w.refuseEnv) return { deny: `env (managed): ${e.name} is not for plugins outside policy to change` }
+    if (w.holdsEnv) return { value: { deny: `${e.name} is held by this session's organization settings` } }
     // The mod sets the slot in use at its start, to learn whether it may switch: not a switch.
     if ((e.value ?? '') === slot) return { value: {} }
     slot = e.value ?? ''
@@ -309,6 +312,9 @@ function world(on: On, w: World, store: Record<string, unknown>): MockClock {
   on('tool.call', { tool: /^(Bash|Edit|Write)$/ }, () => ({ result: 'done', text: 'done' }))
   on('session.measure', (_$, e) => ({ changed: e.changed }))
   on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+  on('turn.step', async function* (_$, e) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn' as const, usage: null }
+  })
   on('turn.complete', () => ({ text: '' }))
   on('classic.StopFailure', () => ({}))
   on('ui.toast', (_$, e) => {
@@ -368,6 +374,16 @@ const PANE_PROPS = {
   scroll: { offset: 0, bodyRows: 30 },
   view: {},
 } as const
+
+/** A model request, as a turn sends one: Claude Code reads the sign-in again first. */
+async function request($: Engine, clock: MockClock): Promise<void> {
+  const stream = $.turn.step({ turnId: 'turn-1', index: 0, model: 'claude-opus-5-5', messageCount: 1 })
+  for await (const _ of stream) {
+    // The chunks say nothing here.
+  }
+  await stream.result
+  await clock.settle()
+}
 
 async function start($: Engine, clock: MockClock): Promise<void> {
   await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
@@ -595,6 +611,23 @@ test('where Claude Code\'s security policy refuses switching, as on a Team seat,
   await pane.unmount()
 })
 
+test('where Claude Code holds a switch back, answering why where the security policy would refuse, the session says so the same way and shows no switch', async ($, on) => {
+  const w = fresh()
+  w.holdsEnv = true
+  w.keychain['Claude Code-credentials'] = blob('tok-1')
+  w.keychain[await keychainItem(SLOT2)] = blob('tok-2')
+  w.usage['tok-1'] = [93, 40]
+  w.usage['tok-2'] = [10, 30]
+  const clock = world(on, w, TWO_LOGINS)
+  await start($, clock)
+  await clock.advance(36_000)
+  expect(w.toasts.filter(t => /^Can't switch accounts in this session/.test(t))).toHaveLength(1)
+  expect(w.toasts.filter(t => /^Switched to/.test(t))).toEqual([])
+  const pane = await $.ui.mount({ plugin: 'account-rotator', surface: 'terminal', component: 'Pane', requestId: 'claude-accounts', props: PANE_PROPS })
+  expect(await pane.find({ text: /^Can't switch accounts in this session/ })).toBeDefined()
+  await pane.unmount()
+})
+
 test('where the policy starts refusing once the mod has moved the session to a seat, it says to start again, not to /login, which would sign in the seat', async ($, on) => {
   const w = fresh()
   w.refuseEnv = true
@@ -629,6 +662,13 @@ test('a switch that does not take, its responses still the old login\'s minutes 
     { kind: 'seven_day', percentUsed: 40, resetsAt: '2026-10-18T03:00:00Z' },
   ]
   await clock.advance(5 * 60_000)
+  // A late response to a request sent before the switch could land says nothing of it.
+  await $.session.measure({ context: { window: 200_000 }, rateLimits: w.limits, changed: ['rateLimits'] })
+  await clock.settle()
+  expect(w.toasts.filter(t => /did not take|has not shown/.test(t))).toEqual([])
+  expect(w.envSets).toHaveLength(1)
+  // One sent since read the sign-in again, and its response is still login 1's.
+  await request($, clock)
   await $.session.measure({ context: { window: 200_000 }, rateLimits: w.limits, changed: ['rateLimits'] })
   await clock.settle()
   expect(w.toasts.filter(t => /did not take: responses still use account 1/.test(t))).toHaveLength(1)
@@ -666,6 +706,48 @@ test('a turn that dies on the usage limit moves to the other login, then asks Cl
   await clock.advance(36_000)
   expect(w.submitted).toHaveLength(1)
   expect(w.submitted[0]).toMatch(/Continue where you left off/)
+})
+
+test('a session opening on a login whose token has run out holds its first move until its first request has refreshed it there; later moves don\'t wait', async ($, on) => {
+  const w = fresh()
+  w.keychain['Claude Code-credentials'] = blob('tok-1', NOW - HOUR)
+  w.keychain[await keychainItem(SLOT2)] = blob('tok-2')
+  w.usage['tok-1'] = [93, 40]
+  w.usage['tok-2'] = [10, 30]
+  const clock = world(on, w, TWO_LOGINS)
+  await start($, clock)
+  expect(w.toasts).toContain("Switching to Claude account 2 once account 1's token has refreshed, as this session's first request does.")
+  expect(w.envSets).toEqual([])
+  // The rotation's later looks hold it too.
+  await clock.advance(3 * 60_000)
+  expect(w.envSets).toEqual([])
+  // The first request refreshes login 1's token where it belongs; the move follows within a minute.
+  w.keychain['Claude Code-credentials'] = blob('tok-1', NOW + 8 * HOUR)
+  await request($, clock)
+  await clock.advance(60_000)
+  expect(w.envSets).toEqual([{ name: 'CLAUDE_SECURESTORAGE_CONFIG_DIR', value: SLOT2 }])
+})
+
+test('a turn that dies on the usage limit just after a switch, sent as the login left, leaves the new login be and carries on once the switch lands', async ($, on) => {
+  const w = fresh()
+  w.keychain['Claude Code-credentials'] = blob('tok-1')
+  w.keychain[await keychainItem(SLOT2)] = blob('tok-2')
+  w.usage['tok-1'] = [93, 40]
+  w.usage['tok-2'] = [10, 30]
+  const clock = world(on, w, TWO_LOGINS)
+  await start($, clock)
+  expect(w.envSets).toEqual([{ name: 'CLAUDE_SECURESTORAGE_CONFIG_DIR', value: SLOT2 }])
+  // Claude Code still sends login 1's cached sign-in, and login 1 runs out.
+  await clock.advance(17_000)
+  w.usage['tok-1'] = [100, 40]
+  await $.classic.StopFailure({ error: 'rate_limit' })
+  await clock.settle()
+  expect(w.envSets).toHaveLength(1)
+  expect(w.submitted).toEqual([])
+  await clock.advance(18_000)
+  expect(w.submitted).toHaveLength(1)
+  expect(w.submitted[0]).toMatch(/Continue where you left off/)
+  expect(w.envSets).toHaveLength(1)
 })
 
 test('a switch is confirmed once a response reports the new login usage, and an idle session is not told it failed', async ($, on) => {
@@ -934,6 +1016,34 @@ async function onThree(w: World): Promise<void> {
   w.usage['tok-3'] = [40, 50]
   w.owners = { 'tok-1': 'one@example.com', 'tok-2': 'two@example.com', 'tok-3': 'three@example.com' }
 }
+
+test('a pick made with Use now while the refresh guard holds a switch back is the switch made once it lifts: the rotation does not put its own in its place', async ($, on) => {
+  const w = fresh()
+  w.keychain['Claude Code-credentials'] = blob('tok-1', NOW + 6 * 60_000)
+  w.keychain[await keychainItem(SLOT2)] = blob('tok-2')
+  w.keychain[await keychainItem(SLOT3)] = blob('tok-3')
+  w.usage['tok-1'] = [93, 40]
+  w.usage['tok-2'] = [10, 30]
+  w.usage['tok-3'] = [50, 60]
+  const clock = world(on, w, THREE_LOGINS)
+  await start($, clock)
+  // Login 1 is spent, and its token refreshes within minutes: the rotation's switch waits.
+  expect(w.toasts.filter(t => /once account 1's token has refreshed/.test(t))).toHaveLength(1)
+  expect(w.envSets).toEqual([])
+  const pane = await $.ui.mount({ plugin: 'account-rotator', surface: 'terminal', component: 'Pane', requestId: 'claude-accounts', props: PANE_PROPS })
+  await pane.press({ key: 'use-3' })
+  await clock.settle()
+  await pane.unmount()
+  // The rotation looks again each minute meanwhile, and would pick login 2.
+  await clock.advance(3 * 60_000)
+  expect(w.envSets).toEqual([])
+  w.keychain['Claude Code-credentials'] = blob('tok-1', NOW + 8 * HOUR)
+  await clock.advance(3 * 60_000)
+  expect(w.envSets).toEqual([{ name: 'CLAUDE_SECURESTORAGE_CONFIG_DIR', value: SLOT3 }])
+  // And the pick stays until a response confirms it.
+  await clock.advance(5 * 60_000)
+  expect(w.envSets).toHaveLength(1)
+})
 
 test('a /login in a session on login 3 that signs in login 2\'s account leaves 3 needing its own sign-in, and the session moves to 2', async ($, on) => {
   const w = fresh()

@@ -79,11 +79,13 @@ const viewAtom = atom({ plugin: 'account-rotator', key: 'view' } as const, EMPTY
  */
 let isPaneShown = false
 /** A switch the refresh guard holds back: the latest one asked for, tried again each minute until it goes. */
-let held: { target: Account; why: string; timer: Timer } | undefined
+let held: { target: Account; why: string; how: SwitchHow; timer: Timer } | undefined
 /** Logins a switch to did not take this session: the rotation leaves them be; Use now still tries. */
 const untaken = new Set<string>()
 /** When this session last moved to another login: until SETTLE_MS after, its requests may still go out as the one before. */
 let movedAt: number | undefined
+/** When this session last sent a model request: Claude Code reads its sign-in again just before one. */
+let lastRequestAt: number | undefined
 
 /**
  * The turns under way in this session, its subagents' too. A switch waits for a
@@ -319,8 +321,8 @@ async function watch($: Host): Promise<void> {
 
 /** Points this session's requests, and every child it starts after, at a slot's login. */
 async function useSlot($: Host, slot: string): Promise<void> {
-  if (slot === '') await $.env.set('CLAUDE_SECURESTORAGE_CONFIG_DIR', undefined)
-  else await $.env.set('CLAUDE_SECURESTORAGE_CONFIG_DIR', slot)
+  const set = await $.env.set('CLAUDE_SECURESTORAGE_CONFIG_DIR', slot === '' ? undefined : slot)
+  if (set.deny !== undefined) throw new SwitchHeld(set.deny)
   // Registered again (a coordinator restarted), the session is on the login this slot holds.
   if (session !== undefined) session.slot = slot
 }
@@ -342,6 +344,16 @@ async function blocked($: Host): Promise<boolean> {
 }
 
 /**
+ * A switch Claude Code itself held back: in a session that takes its settings
+ * from its organization, the write resolves with why, where the security
+ * default's refusal rejects. Either way the session can't switch.
+ */
+class SwitchHeld extends Error {}
+
+/** Whether a switch failed because Claude Code won't let this session switch, however it said so. */
+const isRefusal = (error: unknown): boolean => error instanceof SwitchHeld || isPolicyRefusal(error)
+
+/**
  * Sets the slot already in use, which changes nothing: the policy that refuses
  * a switch refuses this too, so a session that cannot switch says so at its start.
  */
@@ -349,7 +361,7 @@ async function checkSwitching($: Host, slot: string): Promise<void> {
   try {
     await useSlot($, slot)
   } catch (error) {
-    if (isPolicyRefusal(error)) await blocked($)
+    if (isRefusal(error)) await blocked($)
     else await debug($, `switch check failed: ${String(error)}`)
   }
 }
@@ -397,17 +409,19 @@ let rotating: Promise<boolean> | undefined
  * Claude Code's policy refuses it, Connect holds the session where it is, or a
  * turn runs while a switch waits, or the switch waiting is one the person picked.
  */
-function maybeRotate($: Host): Promise<boolean> {
-  rotating ??= rotateOnce($).finally(() => {
+function maybeRotate($: Host, isOpening = false): Promise<boolean> {
+  rotating ??= rotateOnce($, isOpening).finally(() => {
     rotating = undefined
   })
   return rotating
 }
 
-async function rotateOnce($: Host): Promise<boolean> {
+async function rotateOnce($: Host, isOpening: boolean): Promise<boolean> {
   const now = await $.clock.now()
   const view = await getView($)
   if (view.accounts.length === 0 || isConnectingChrome || view.isSwitchBlocked || (view.pending !== undefined && (view.pending.isPicked === true || turns.size > 0))) return false
+  // A pick of the person's that the refresh guard holds back is the switch made once it lifts.
+  if (held?.how.isPicked === true) return false
   const isLeaving = shouldLeave(view, now)
   if (!isLeaving && view.rotateTo !== 'reset') return false
   const isRetiring = view.retiring?.includes(view.activeId) === true
@@ -415,29 +429,56 @@ async function rotateOnce($: Host): Promise<boolean> {
   // With none to move to, the band above the prompt says when the next login frees up.
   const target = targetFor(view, now)
   if (target === undefined) return false
-  return switchTo($, target, isLeaving ? whyLeave(view, now) : `its week resets before account ${view.activeId}'s`)
+  // The rotation's later looks don't make an opening move the guard holds back before its time.
+  const how = { isOpening: isOpening || held?.how.isOpening === true }
+  return switchTo($, target, isLeaving ? whyLeave(view, now) : `its week resets before account ${view.activeId}'s`, how)
 }
 
-/** The login in use, when its token refreshes too soon for the refresh guard to let the session leave it for `target`. */
-function refreshingSoon(view: View, target: Account, now: number): Account | undefined {
+/**
+ * The login in use, when its token refreshes too soon for the refresh guard
+ * to let the session leave it for `target`. As a session opens, also one whose
+ * token has run out, as overnight: Claude Code refreshes it at the session's
+ * first request, which may come while its read of the login is still cached,
+ * and would save the refreshed token in the slot the session moved to, over
+ * that account's sign-in. Other moves don't wait on a token that may never
+ * refresh.
+ */
+function refreshingSoon(view: View, target: Account, now: number, isOpening = false): { account: Account; hasRunOut: boolean } | undefined {
   const active = view.accounts.find(a => a.id === view.activeId)
   if (active === undefined || active.id === target.id) return undefined
   const expiresAt = view.expiresAt?.[active.id]
-  const isSoon = expiresAt !== undefined && expiresAt > now && expiresAt - now < REFRESH_GUARD_MS
-  return isSoon ? active : undefined
+  if (expiresAt === undefined || expiresAt - now >= REFRESH_GUARD_MS) return undefined
+  const hasRunOut = expiresAt <= now
+  return hasRunOut && !isOpening ? undefined : { account: active, hasRunOut }
 }
 
-/** Points this session at `target`; false while the refresh guard holds it back, or Claude Code's policy refuses it. Quiet: no toast. */
-async function switchTo($: Host, target: Account, why: string, isQuiet = false): Promise<boolean> {
-  const active = refreshingSoon(await getView($), target, await $.clock.now())
-  if (active !== undefined) {
+/**
+ * How a switch is made. Quiet: no toast. Picked (Use now): the rotation leaves
+ * it be until a response confirms it. Opening: the move a session makes as it
+ * opens, which also waits for a token that has run out.
+ */
+type SwitchHow = { isQuiet?: boolean; isPicked?: boolean; isOpening?: boolean }
+
+/** Points this session at `target`; false while the refresh guard holds it back, or Claude Code's policy refuses it. */
+async function switchTo($: Host, target: Account, why: string, how: SwitchHow = {}): Promise<boolean> {
+  const { isQuiet = false, isPicked = false } = how
+  // Until the session's first request, which refreshes the token where it is.
+  const isOpening = how.isOpening === true && lastRequestAt === undefined
+  const turning = refreshingSoon(await getView($), target, await $.clock.now(), isOpening)
+  if (turning !== undefined) {
     if (held === undefined) {
-      tell($, `Switching to Claude account ${target.id} in a few minutes, once account ${active.id}'s token has refreshed.`)
+      const { account, hasRunOut } = turning
+      tell(
+        $,
+        hasRunOut
+          ? `Switching to Claude account ${target.id} once account ${account.id}'s token has refreshed, as this session's first request does.`
+          : `Switching to Claude account ${target.id} in a few minutes, once account ${account.id}'s token has refreshed.`,
+      )
       const retry = () => {
-        if (held !== undefined) void switchTo($, held.target, held.why)
+        if (held !== undefined) void switchTo($, held.target, held.why, held.how)
       }
-      held = { target, why, timer: $.clock.every(60_000, retry) }
-    } else held = { ...held, target, why }
+      held = { target, why, how, timer: $.clock.every(60_000, retry) }
+    } else held = { ...held, target, why, how }
     return false
   }
   held?.timer.cancel()
@@ -446,7 +487,7 @@ async function switchTo($: Host, target: Account, why: string, isQuiet = false):
   try {
     await useSlot($, target.slot)
   } catch (error) {
-    if (!isPolicyRefusal(error)) throw error
+    if (!isRefusal(error)) throw error
     // A press of Use now or Rotate now gets an answer, even once the notice has shown.
     if (!(await blocked($))) tell($, blockedText(isOnNormalLogin(await getView($))))
     return false
@@ -458,7 +499,7 @@ async function switchTo($: Host, target: Account, why: string, isQuiet = false):
     ...v,
     activeId: target.id,
     // A switch made while another waits keeps the login the last response confirmed, which a switch that doesn't take goes back to.
-    pending: { id: target.id, from: v.pending?.from ?? v.activeId, since: now },
+    pending: { id: target.id, from: v.pending?.from ?? v.activeId, since: now, ...(isPicked ? { isPicked: true } : {}) },
     removing: undefined,
   }))
   void patchSession($, { accountId: target.id, isPending: true })
@@ -478,16 +519,21 @@ async function settlePending($: Host, isResponse: boolean): Promise<void> {
   if (pending === undefined) return
   const now = await $.clock.now()
   if (now - pending.since < SETTLE_MS) return
+  // Read before the coordinator is asked: a request sent while it answers was not read for yet. Only a request that
+  // went out once the switch could land read the new sign-in; a late response to an earlier one says nothing of it.
+  const isTried = lastRequestAt !== undefined && lastRequestAt >= pending.since + SETTLE_MS
   const reading = readingFromLimits((await $.session.usage()).rateLimits, now)
   // Only a response can change this session's reading, so only a response asks for fresh usage: idle sessions compare with what the coordinator already has.
   if (isResponse) await act($, 'POST', `/accounts/${pending.id}/check`, { fresh: true }).catch(error => debug($, `check of account ${pending.id} failed: ${String(error)}`))
   if (sameUsage(reading, (await getView($)).readings[pending.id], now)) {
     untaken.delete(pending.id)
-    await setView($, v => ({ ...v, pending: undefined }))
+    await setView($, v => (isStill(v, pending) ? { ...v, pending: undefined } : v))
     void patchSession($, { isPending: false })
-  } else if (isResponse && now - pending.since > CONFIRM_GIVE_UP_MS) {
+  } else if (isResponse && isTried && now - pending.since > CONFIRM_GIVE_UP_MS) {
     const from = accounts.find(a => a.id === pending.from)
     if (from !== undefined) await act($, 'POST', `/accounts/${from.id}/check`, { fresh: true }).catch(() => undefined)
+    // Another switch may have taken this one's place while the coordinator answered.
+    if (!isStill(await getView($), pending)) return
     if (from === undefined || !sameUsage(reading, (await getView($)).readings[from.id], now)) {
       await setView($, v => ({ ...v, pending: undefined }))
       void patchSession($, { isPending: false })
@@ -509,6 +555,11 @@ async function settlePending($: Host, isResponse: boolean): Promise<void> {
         `The rotation leaves account ${pending.id} be in this session; Use now tries it again.`,
     )
   }
+}
+
+/** Whether `pending` is still the switch the session waits on: another may have taken its place meanwhile. */
+function isStill(v: View, pending: NonNullable<View['pending']>): boolean {
+  return v.pending?.id === pending.id && v.pending.since === pending.since
 }
 
 /** Reports a response's usage to the coordinator, once it has moved enough or a while has passed. */
@@ -570,6 +621,21 @@ async function onStopFailure($: Host, error: string): Promise<void> {
   const view = await getView($)
   const active = view.accounts.find(a => a.id === view.activeId)
   if (active === undefined) return
+  const { pending } = view
+  if (pending !== undefined && (await $.clock.now()) - pending.since < SETTLE_MS) {
+    // Claude Code rereads a sign-in at most every 30 s: so soon after a switch the turn may have gone out as the
+    // login the session left. Fresh usage says which one is spent or locked; neither is presumed.
+    const check = (id: string) => act($, 'POST', `/accounts/${id}/check`, { fresh: true }).catch(e => debug($, `check of account ${id} failed: ${String(e)}`))
+    if (pending.from !== active.id) await check(pending.from)
+    await check(active.id)
+    const now = await $.clock.now()
+    if (!shouldLeave(await getView($), now)) {
+      if (isConnectingChrome) isCutByVisit = true
+      // Once the switch lands, as for a turn the switch itself cut short.
+      else $.clock.after(Math.max(0, pending.since + SETTLE_MS - now), () => void $.prompt.submit({ text: CONTINUE }))
+      return
+    }
+  }
   const scope = viewScope(view)
   await act($, 'POST', `/accounts/${active.id}/${error === 'rate_limit' ? 'spent' : 'rejected'}`, {
     ...(session === undefined ? {} : { sessionId: session.key }),
@@ -844,14 +910,17 @@ async function connectingChrome(
   if (target === undefined || from === undefined || !canConnectChrome({ ...view, chromeAccountId: target.id })) return undefined
   // Tried for the extension: the account picked before stays its own until a browser answers as this one.
   const isTrial = target.id !== view.chromeAccountId
-  const active = refreshingSoon(view, target, await $.clock.now())
-  if (active !== undefined) {
-    if (!isQuiet) tell($, `Chrome can connect as account ${target.id} once account ${active.id}'s token has refreshed: try again in a few minutes.`)
+  // Quiet is Connect as the session opens.
+  const turning = refreshingSoon(view, target, await $.clock.now(), isQuiet)
+  if (turning !== undefined) {
+    if (!isQuiet) tell($, `Chrome can connect as account ${target.id} once account ${turning.account.id}'s token has refreshed: try again in a few minutes.`)
     return undefined
   }
   await setView($, v => ({ ...v, chromeConnecting: target.id }))
   const isVisit = from.id !== target.id
-  if (isVisit && !(await switchTo($, target, 'Claude in Chrome connects as it', true))) return undefined
+  // A pick of the person's that no response has confirmed yet is still theirs once Connect is done.
+  const isFromPicked = view.pending?.isPicked === true && view.pending.id === from.id
+  if (isVisit && !(await switchTo($, target, 'Claude in Chrome connects as it', { isQuiet: true }))) return undefined
   const wait = movedAt === undefined ? 0 : movedAt + SETTLE_MS - (await $.clock.now())
   if (wait > 0) await $.clock.sleep(wait)
   // A connection made before, as whichever login the session was on then, is made again as this one.
@@ -871,9 +940,10 @@ async function connectingChrome(
   if (answer === 'paired') {
     // A browser answering as the account shows the switch took: the rotation need not wait for a response to say so.
     untaken.delete(target.id)
-    await setView($, v => (v.pending?.id === target.id ? { ...v, pending: undefined } : v))
+    // Not a pick's: it waits for a request there, as the rotation would otherwise take it over.
+    await setView($, v => (v.pending?.id === target.id && v.pending.isPicked !== true ? { ...v, pending: undefined } : v))
   }
-  if (isVisit) await leaveVisit($, from)
+  if (isVisit) await leaveVisit($, from, isFromPicked)
   if (!isQuiet && answer === 'paired') tell($, `Claude in Chrome is connected as Claude account ${label(target)}.`)
   if (!isQuiet && answer === 'unpaired') {
     const back = isTrial ? view.accounts.find(a => a.id === view.chromeAccountId) : undefined
@@ -893,9 +963,14 @@ async function connectingChrome(
  * session opening on Claude Code's login would; else back to that login while
  * it can serve, or with the rotation off; else on to the one the coordinator
  * picks. Other than that, the extension's account's usage is not the
- * session's to spend.
+ * session's to spend. A login the person picked with Use now, unconfirmed yet,
+ * is gone back to whatever the rotation would pick.
  */
-async function leaveVisit($: Host, from: Account): Promise<void> {
+async function leaveVisit($: Host, from: Account, isPicked: boolean): Promise<void> {
+  if (isPicked) {
+    await switchTo($, from, 'back from connecting Claude in Chrome', { isQuiet: true, isPicked: true })
+    return
+  }
   const now = await $.clock.now()
   const view = await getView($)
   const fromView = { ...view, activeId: from.id }
@@ -907,7 +982,7 @@ async function leaveVisit($: Host, from: Account): Promise<void> {
     return
   }
   if (view.rotateTo === 'off' || canServe) {
-    await switchTo($, from, 'back from connecting Claude in Chrome', true)
+    await switchTo($, from, 'back from connecting Claude in Chrome', { isQuiet: true })
     return
   }
   const target = targetFor(fromView, now)
@@ -998,10 +1073,7 @@ function actions($: Host): Actions {
         getView($).then(view => {
           const account = view.accounts.find(a => a.id === id)
           if (account === undefined) return false
-          return switchTo($, account, 'you picked it').then(async isMoved => {
-            if (isMoved) await setView($, v => (v.pending === undefined ? v : { ...v, pending: { ...v.pending, isPicked: true } }))
-            return isMoved
-          })
+          return switchTo($, account, 'you picked it', { isPicked: true })
         }),
       ),
     askRemove: id => background(setView($, v => ({ ...v, removing: id }))),
@@ -1055,7 +1127,7 @@ async function boot($: Host, isInteractive: boolean): Promise<void> {
   if (isInteractive && shouldConnectAtOpen(await getView($))) {
     void connectChrome($, true).catch(error => debug($, `Chrome connect failed: ${String(error)}`))
   }
-  await maybeRotate($)
+  await maybeRotate($, true)
   void watch($).catch(error => debug($, `stopped following the coordinator: ${String(error)}`))
 }
 
@@ -1086,6 +1158,12 @@ export const register: Register = on => {
   on('turn.start', async ($, e, next) => {
     turns.add(e.turnId)
     return next(e)
+  })
+
+  // Claude Code reads the sign-in again just before a request: only a request after a switch could land tests it.
+  on('turn.step', async function* ($, e, next) {
+    lastRequestAt = await $.clock.now()
+    return yield* next(e)
   })
 
   on('turn.complete', async ($, e, next) => {
