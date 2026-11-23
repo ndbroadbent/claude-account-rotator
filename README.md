@@ -62,13 +62,13 @@ Every session talks to one coordinator process over a Unix socket, `~/.claude/ac
 
 Where a session goes is the session's own decision, made from the coordinator's state, so every session picks alike. What only a session can do stays in the session too: pointing its own requests at an account, reading its responses' usage, and Claude in Chrome.
 
-The first session that needs the coordinator starts it in the background, and it exits once no session has used it for 30 minutes. To keep it running from login (the menu bar app needs this), install it as a LaunchAgent on macOS:
+The first session that needs the coordinator starts it in the background, and it exits once no session has used it for 30 minutes. To keep it running (the menu bar app needs this), install it as a LaunchAgent on macOS or a systemd user service on Linux:
 
 ```
 node ~/.claude/plugins/marketplaces/claude-account-rotator/coordinator/cli.ts install
 ```
 
-That copies the coordinator to `~/.claude/account-rotator/app`, so a plugin update doesn't move it. A session with a newer version of the mod replaces an older coordinator by itself. Other commands: `status` (each account's usage and sessions), `start`, `stop`, `upgrade` and `uninstall`. Its state and log are in `~/.claude/account-rotator`; the API is in [docs/coordinator-api.md](docs/coordinator-api.md).
+That copies the coordinator to `~/.claude/account-rotator/app`, so a plugin update doesn't move it. On macOS it runs from login. On Linux it's `~/.config/systemd/user/claude-account-rotator.service`, enabled and started, restarted if it crashes; it runs while you're logged in, or from boot once `loginctl enable-linger $USER` has turned lingering on, as on a server. A session with a newer version of the mod replaces an older coordinator by itself. Other commands: `status` (each account's usage and sessions), `start`, `stop`, `upgrade` and `uninstall`. Its state and log are in `~/.claude/account-rotator`; the API is in [docs/coordinator-api.md](docs/coordinator-api.md).
 
 ## The menu bar app
 
@@ -164,6 +164,13 @@ A window Claude Code stops from switching can connect only as the account it is 
 
 ## How it works
 
+- **On a machine with no browser** (a server you reach over SSH), the panel's sign-in can't finish: `claude auth login` waits for a browser on that machine. Sign in from a terminal there instead. Account 1 is `claude auth login`. For another account, press **+ Add an account** (or **Sign in** on its row) to make its folder, then run, with its number:
+
+  ```sh
+  n=2; CLAUDE_SECURESTORAGE_CONFIG_DIR=~/.claude/accounts/$n CLAUDE_CONFIG_DIR=~/.claude/accounts/$n claude auth login
+  ```
+
+  The coordinator reads the new sign-in within a minute.
 - Each account you add gets a folder, `~/.claude/accounts/<n>`, and Claude Code keeps its sign-in in the keychain under that folder's name (on Linux, in that folder's `.credentials.json`), as for any config folder. A switch points the session at another account's sign-in.
 - One coordinator process reads the sign-ins and makes the network calls for every session: each account's usage at most every 5 minutes, from the endpoint `/usage` reads, and once per sign-in who it belongs to, from the one Claude Code asks at a sign-in, each with that account's own token. In a session with Claude in Chrome it also asks Claude Code's own Claude in Chrome which browsers answer, as the session opens, before moving off the extension's account, and on **Use for Chrome**, **Try to connect** and **Connect**. Tokens stay where Claude Code keeps them; the coordinator stores (in `~/.claude/account-rotator/state.json`) each account's email, organization, plan and last usage, a digest of its token (never the token), to tell a new sign-in, and which account your Chrome extension is signed in to. The file is readable only by you.
 

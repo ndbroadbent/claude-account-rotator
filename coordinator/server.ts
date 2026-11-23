@@ -315,7 +315,7 @@ export async function serve(options: ServeOptions): Promise<void> {
     server.listen(sock, () => resolve())
   })
   fs.chmodSync(sock, 0o600)
-  log(`coordinator ${VERSION} listening on ${sock} (pid ${process.pid}${options.isManaged ? ', launchd' : ''})`)
+  log(`coordinator ${VERSION} listening on ${sock} (pid ${process.pid}${options.isManaged ? `, ${process.platform === 'darwin' ? 'launchd' : 'systemd'}` : ''})`)
   void coordinator.start().catch(error => log(`start failed: ${String(error)}`))
 
   if (options.idleExitMs !== undefined) {

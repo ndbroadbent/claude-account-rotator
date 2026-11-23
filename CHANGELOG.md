@@ -2,6 +2,12 @@
 
 What each version of the account rotator changed. To get each one as Claude Code starts, turn on auto-update: in `/plugin`, open **Marketplaces**, pick **claude-account-rotator** and choose **Enable auto-update**. To update by hand, run `claude plugin marketplace update claude-account-rotator`, then `claude plugin update account-rotator@claude-account-rotator`, and start a new session.
 
+## 0.7.1 - 2026-11-23
+
+- **`cli.ts install` works on Linux:** it installs the coordinator as a systemd user service, `~/.config/systemd/user/claude-account-rotator.service`, enabled and started, restarted after a crash but not after an upgrade's clean exit, as the LaunchAgent is. With lingering on it runs from boot. `uninstall`, `start`, `upgrade` and `status` know it too.
+- The README says how to sign in an account on a machine with no browser.
+- `cli.ts status` no longer looks for the move fields 0.7.0 dropped, and says which account is being removed.
+
 ## 0.7.0 - 2026-11-23
 
 Each session now decides where it goes; the coordinator only knows the accounts. This is the first step of moving the coordinator's work into Quietdeck's node, which will serve the same API.

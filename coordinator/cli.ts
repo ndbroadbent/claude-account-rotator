@@ -1,9 +1,10 @@
 // The coordinator's command line: `node coordinator/cli.ts <command>`.
 //
-//   serve [--managed] [--idle-exit-ms N]   run it in the foreground (launchd runs this)
-//   start                                  make sure one runs: kickstart launchd's, or start one in the background
+//   serve [--managed] [--idle-exit-ms N]   run it in the foreground (launchd or systemd runs this)
+//   start                                  make sure one runs: start the installed service, or one in the background
 //   upgrade                                replace a running coordinator with this version
-//   install                                copy this version to ~/.claude/account-rotator/app and run it at login (macOS)
+//   install                                copy this version to ~/.claude/account-rotator/app and run it at login:
+//                                          a LaunchAgent on macOS, a systemd user service on Linux
 //   uninstall                              stop running it at login
 //   status                                 what the running one knows
 //   stop                                   ask the running one to exit
@@ -17,12 +18,17 @@ import { fileURLToPath } from 'node:url'
 
 import type { SharedState } from '../types/index.d.ts'
 import { cleanEnv, logPath, serve, socketPath, stateDir } from './server.ts'
+import { unitFile } from './service.ts'
 import { VERSION, compareVersions } from './version.ts'
 
 const LABEL = 'com.github.ndbroadbent.claude-account-rotator'
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.dirname(HERE)
 const plistPath = () => path.join(os.homedir(), 'Library', 'LaunchAgents', `${LABEL}.plist`)
+const UNIT = 'claude-account-rotator.service'
+const unitPath = () => path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'systemd', 'user', UNIT)
+const isMac = process.platform === 'darwin'
+const isLinux = process.platform === 'linux'
 const appDir = () => path.join(stateDir(), 'app')
 const domain = () => `gui/${process.getuid?.() ?? 0}`
 
@@ -134,7 +140,8 @@ function isAlive(pid: number): boolean {
   }
 }
 
-const isInstalled = () => process.platform === 'darwin' && fs.existsSync(plistPath())
+const isInstalled = () => (isMac && fs.existsSync(plistPath())) || (isLinux && fs.existsSync(unitPath()))
+const manager = () => (isMac ? 'launchd' : 'systemd')
 
 function launchctl(...args: string[]): { ok: boolean; output: string } {
   try {
@@ -142,6 +149,21 @@ function launchctl(...args: string[]): { ok: boolean; output: string } {
   } catch (error) {
     const e = error as { stdout?: string; stderr?: string }
     return { ok: false, output: `${e.stdout ?? ''}${e.stderr ?? ''}` }
+  }
+}
+
+/**
+ * systemctl for this user's own services. A Claude Code session started outside
+ * a login shell may lack XDG_RUNTIME_DIR, which systemctl --user needs to find
+ * the user's manager: it is /run/user/<uid> wherever systemd-logind runs.
+ */
+function systemctl(...args: string[]): { ok: boolean; output: string } {
+  const env = { ...cleanEnv(), XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid?.() ?? 0}` }
+  try {
+    return { ok: true, output: execFileSync('systemctl', ['--user', ...args], { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] }) }
+  } catch (error) {
+    const e = error as { stdout?: string; stderr?: string; message?: string }
+    return { ok: false, output: `${e.stdout ?? ''}${e.stderr ?? ''}` || (e.message ?? '') }
   }
 }
 
@@ -164,10 +186,11 @@ async function start(): Promise<void> {
     process.stdout.write(`running: ${running.version} (pid ${running.pid})\n`)
     return
   }
-  if (isInstalled()) {
+  if (isInstalled() && isMac) {
     const kick = launchctl('kickstart', `${domain()}/${LABEL}`)
     if (!kick.ok) launchctl('bootstrap', domain(), plistPath())
-  } else spawnDetached()
+  } else if (isInstalled()) systemctl('start', UNIT)
+  else spawnDetached()
   await waitFor(async () => (await hello()) !== undefined, 15_000, 'the coordinator did not start')
   const started = await hello()
   process.stdout.write(`started: ${started?.version} (pid ${started?.pid})\n`)
@@ -180,18 +203,30 @@ async function stopRunning(): Promise<void> {
   await waitFor(async () => (await hello()) === undefined, 10_000, 'the coordinator did not stop')
 }
 
-const xml = (s: string) => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
-
-function plist(): string {
+/** The variables the service runs with: what a session's `claude` children need, and nothing of the session's own. */
+function serviceEnv(): Record<string, string> {
   const env = cleanEnv()
-  const vars: Record<string, string> = {
+  return {
     PATH: env.PATH ?? '/usr/bin:/bin:/usr/sbin:/sbin',
     HOME: os.homedir(),
     USER: env.USER ?? os.userInfo().username,
     ...(env.LANG === undefined ? {} : { LANG: env.LANG }),
     ...(env.CLAUDE_ACCOUNT_ROTATOR_DIR === undefined ? {} : { CLAUDE_ACCOUNT_ROTATOR_DIR: env.CLAUDE_ACCOUNT_ROTATOR_DIR }),
   }
-  const args = [process.execPath, path.join(appDir(), 'coordinator', 'cli.ts'), 'serve', '--managed']
+}
+
+const serviceArgs = () => [process.execPath, path.join(appDir(), 'coordinator', 'cli.ts'), 'serve', '--managed']
+
+/** The systemd user service, run from the app copy. */
+function unit(): string {
+  return unitFile({ args: serviceArgs(), env: serviceEnv(), workingDir: stateDir(), log: path.join(stateDir(), 'systemd.log') })
+}
+
+const xml = (s: string) => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+
+function plist(): string {
+  const vars = serviceEnv()
+  const args = serviceArgs()
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -246,11 +281,12 @@ function copyApp(): void {
 }
 
 async function install(): Promise<void> {
-  if (process.platform !== 'darwin') fail('install sets up a macOS LaunchAgent; elsewhere, sessions start the coordinator themselves')
+  if (!isMac && !isLinux) fail('install sets up a macOS LaunchAgent or a systemd user service; elsewhere, sessions start the coordinator themselves')
   fs.mkdirSync(stateDir(), { recursive: true, mode: 0o700 })
   const running = await hello()
   if (running !== undefined && !running.isManaged) await stopRunning()
   copyApp()
+  if (isLinux) return installUnit()
   fs.mkdirSync(path.dirname(plistPath()), { recursive: true })
   fs.writeFileSync(plistPath(), plist())
   launchctl('bootout', `${domain()}/${LABEL}`)
@@ -267,7 +303,39 @@ async function install(): Promise<void> {
   process.stdout.write(`installed: coordinator ${VERSION} runs at login (${plistPath()})\n`)
 }
 
+/** Linux: writes the user service, and (re)starts it on this version. */
+async function installUnit(): Promise<void> {
+  fs.mkdirSync(path.dirname(unitPath()), { recursive: true })
+  fs.writeFileSync(unitPath(), unit())
+  const reload = systemctl('daemon-reload')
+  if (!reload.ok) fail(`systemctl --user daemon-reload failed (is a user systemd manager running?): ${reload.output.trim()}`)
+  const enable = systemctl('enable', UNIT)
+  if (!enable.ok) fail(`systemctl --user enable failed: ${enable.output.trim()}`)
+  // restart, not start: an upgrade replaces the one running.
+  const restart = systemctl('restart', UNIT)
+  if (!restart.ok) fail(`systemctl --user restart failed: ${restart.output.trim()}`)
+  await waitFor(async () => (await hello())?.version === VERSION, 15_000, `coordinator ${VERSION} did not start (see ${path.join(stateDir(), 'systemd.log')})`)
+  const user = os.userInfo().username
+  const linger = execFileSyncQuiet('loginctl', ['show-user', user, '--property=Linger', '--value'])
+  const note = linger === 'yes' ? 'runs at boot (lingering is on)' : `runs while ${user} is logged in; \`loginctl enable-linger ${user}\` runs it from boot`
+  process.stdout.write(`installed: coordinator ${VERSION} ${note} (${unitPath()})\n`)
+}
+
+/** A command's trimmed output, or undefined when it fails or is missing. */
+function execFileSyncQuiet(cmd: string, args: string[]): string | undefined {
+  try {
+    return execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+  } catch {
+    return undefined
+  }
+}
+
 async function uninstall(): Promise<void> {
+  if (isLinux && fs.existsSync(unitPath())) {
+    systemctl('disable', '--now', UNIT)
+    fs.rmSync(unitPath(), { force: true })
+    systemctl('daemon-reload')
+  }
   if (fs.existsSync(plistPath())) {
     launchctl('bootout', `${domain()}/${LABEL}`)
     fs.rmSync(plistPath(), { force: true })
@@ -290,26 +358,22 @@ async function upgrade(): Promise<void> {
 
 async function status(): Promise<void> {
   const running = await hello()
-  if (running === undefined) fail(`not running${isInstalled() ? ' (installed: launchctl should restart it)' : ''}`)
+  if (running === undefined) fail(`not running${isInstalled() ? ` (installed: ${manager()} should restart it)` : ''}`)
   const { body } = await call('GET', '/state')
   const state = body as SharedState
   const pct = (n: number | undefined) => (n === undefined ? '  ?' : `${Math.round(n)}%`.padStart(4))
-  process.stdout.write(`coordinator ${running.version} (pid ${running.pid}${running.isManaged ? ', launchd' : ''}), ${state.sessions.length} sessions\n`)
+  process.stdout.write(`coordinator ${running.version} (pid ${running.pid}${running.isManaged ? `, ${manager()}` : ''}), ${state.sessions.length} sessions\n`)
   // As of November 2026 no plan reports a 5-hour window: shown only where one does.
   const hasFive = state.accounts.some(a => a.reading?.fiveHour !== undefined)
   process.stdout.write(`combined: ${hasFive ? `5-hour ${pct(state.combined.fiveHour?.pct)}, ` : ''}week ${pct(state.combined.sevenDay?.pct)}\n`)
-  // A model with a week of its own (Fable) gets a column, and where its sessions move to.
+  // A model with a week of its own (Fable) gets a column.
   const models = [...new Set(state.accounts.flatMap(a => Object.keys(a.reading?.models ?? {})))].sort()
   for (const a of state.accounts) {
     const r = a.reading
     const own = models.map(m => `${m} ${pct(r?.models?.[m]?.pct)}  `).join('')
-    const moves = [
-      ...(a.moveTo ? [`moves to ${a.moveTo}`] : []),
-      ...Object.entries(a.moveToFor ?? {}).map(([m, to]) => `${m} moves to ${to}`),
-    ]
     process.stdout.write(
       `  ${a.id} ${(a.email ?? '(unknown)').padEnd(32)} ${hasFive ? `5h ${pct(r?.fiveHour?.pct)}  ` : ''}wk ${pct(r?.sevenDay?.pct)}  ${own}${a.health.kind}` +
-        `${a.health.kind === 'login-needed' ? ` (${a.health.why})` : ''}, ${a.sessionCount} sessions${moves.map(m => `, ${m}`).join('')}\n`,
+        `${a.health.kind === 'login-needed' ? ` (${a.health.why})` : ''}, ${a.sessionCount} sessions${a.isRetiring ? ', being removed' : ''}\n`,
     )
   }
 }
