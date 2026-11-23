@@ -564,10 +564,17 @@ export class Coordinator {
     return account.id
   }
 
-  patchSession(id: string, patch: { accountId?: string; isBlocked?: boolean; isPending?: boolean }): void {
+  /** `why` is the session's reason for a move to another account, which the log keeps. */
+  patchSession(id: string, patch: { accountId?: string; isBlocked?: boolean; isPending?: boolean }, why?: string): void {
     const session = this.sessions.get(id)
     if (session === undefined) throw new HttpError(404, `No session ${id}: register it again.`)
     if (patch.accountId !== undefined) this.need(patch.accountId)
+    const isMove = patch.accountId !== undefined && patch.accountId !== session.accountId
+    if (isMove || why !== undefined) {
+      const where = session.pid === undefined ? id : `pid ${session.pid}${session.cwd === undefined ? '' : ` in ${session.cwd}`}`
+      const move = isMove ? `account ${session.accountId} -> ${patch.accountId}` : `on account ${session.accountId}`
+      this.deps.log(`session ${where}: ${move}${why === undefined ? '' : ` (${why})`}`)
+    }
     const next = { ...session, ...patch, lastSeen: this.deps.now() }
     this.sessions.set(id, next)
     if (JSON.stringify({ ...session, lastSeen: 0 }) !== JSON.stringify({ ...next, lastSeen: 0 })) {
@@ -827,7 +834,7 @@ export class Coordinator {
           ...(typeof b.accountId === 'string' ? { accountId: b.accountId } : {}),
           ...(typeof b.isBlocked === 'boolean' ? { isBlocked: b.isBlocked } : {}),
           ...(typeof b.isPending === 'boolean' ? { isPending: b.isPending } : {}),
-        })
+        }, typeof b.why === 'string' ? b.why.slice(0, 300) : undefined)
         return ok()
       case 'DELETE /sessions/:id':
         this.dropSession(id)

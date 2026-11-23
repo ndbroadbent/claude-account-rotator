@@ -26,7 +26,7 @@ HTTP/1.1 over a Unix domain socket:
 | `GET /hello` | | `{ name, version, pid, startedAt }`. `name` is `claude-account-rotator`, or `quietdeck-node` where Quietdeck's node serves the API. |
 | `GET /state?since=V&wait=MS&session=ID` | | `State`. With `since` equal to the current `version`, the answer waits until the state changes or `wait` ms pass (at most 55000), then answers the current state. `session` marks that session alive. A Claude Code session asks for 25000 at most: `$.http.fetch` aborts after 30 s. |
 | `POST /sessions` | `{ id, pid?, slot, cwd?, isInteractive }` | `{ accountId, state }`. Registers a session on the login whose `slot` it reads; an unknown slot becomes a new login. |
-| `PATCH /sessions/:id` | `{ accountId?, isBlocked?, isPending? }` | `{ state }` |
+| `PATCH /sessions/:id` | `{ accountId?, isBlocked?, isPending?, why? }` | `{ state }`. `why`: the reason for a move, or for the rotation stopping in the session, which the coordinator writes to its log. |
 | `DELETE /sessions/:id` | | `{ ok: true }` |
 | `POST /readings` | `{ accountId, reading, sessionId? }` | `{ state }`. A response's rate-limit windows, as the session saw them. |
 | `POST /accounts/:id/spent` | `{ sessionId?, model? }` | `{ state }`. A turn hit the usage limit on this login. `model` names a model with a week of its own (`Fable`) the session was on: while the login's week has room, that week counts as full, not the login's. |

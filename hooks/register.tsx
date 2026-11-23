@@ -66,6 +66,18 @@ const WAIT_MS = 25_000
 /** A response's usage goes to the coordinator when it moved by this many points, or this long after the last. */
 const REPORT_POINTS = 1
 const REPORT_EVERY_MS = 60_000
+/**
+ * A guard against a rotation that goes back and forth: a session whose
+ * rotation switched this many times within BOUNCE_WINDOW_MS stops switching on
+ * its own for BOUNCE_PAUSE_MS, and says so. Use now still switches.
+ */
+const BOUNCE_MAX = 3
+const BOUNCE_WINDOW_MS = 60_000
+const BOUNCE_PAUSE_MS = 15 * 60_000
+/** When the rotation last switched this session on its own, epoch ms. */
+let autoSwitches: { at: number; from: string; to: string }[] = []
+/** Until when the guard holds the rotation back in this session. */
+let pausedUntil: number | undefined
 const CONTINUE =
   'Claude Code switched to another of your Claude accounts because the previous one hit its usage limit or lost its sign-in. Continue where you left off.'
 
@@ -196,7 +208,7 @@ async function registerSession($: Host): Promise<void> {
 }
 
 /** Tells the coordinator what changed in this session; one that no longer knows it (it restarted) gets it registered again, once. */
-function patchSession($: Host, patch: { accountId?: string; isBlocked?: boolean; isPending?: boolean }, canRegister = true): Promise<void> {
+function patchSession($: Host, patch: { accountId?: string; isBlocked?: boolean; isPending?: boolean; why?: string }, canRegister = true): Promise<void> {
   if (session === undefined) return Promise.resolve()
   return api($, 'PATCH', `/sessions/${encodeURIComponent(session.key)}`, patch)
     .then(() => undefined)
@@ -419,9 +431,30 @@ async function rotateOnce($: Host, isOpening: boolean): Promise<boolean> {
   // With none to move to, the band above the prompt says when the next login frees up.
   const target = targetFor(view, now)
   if (target === undefined) return false
+  if (isBouncing($, now)) return false
   // The rotation's later looks don't make an opening move the guard holds back before its time.
   const how = { isOpening: isOpening || held?.how.isOpening === true }
-  return switchTo($, target, isLeaving ? whyLeave(view, now) : `its week resets before account ${view.activeId}'s`, how)
+  const from = view.activeId
+  const moved = await switchTo($, target, isLeaving ? whyLeave(view, now) : `its week resets before account ${view.activeId}'s`, how)
+  if (moved) autoSwitches.push({ at: now, from, to: target.id })
+  return moved
+}
+
+/**
+ * Whether the guard holds the rotation back: it switched BOUNCE_MAX times in
+ * the last minute (whatever made it), so it stops for a while, telling the
+ * person and the coordinator's log once.
+ */
+function isBouncing($: Host, now: number): boolean {
+  if (pausedUntil !== undefined && now < pausedUntil) return true
+  autoSwitches = autoSwitches.filter(s => now - s.at < BOUNCE_WINDOW_MS)
+  if (autoSwitches.length < BOUNCE_MAX) return false
+  pausedUntil = now + BOUNCE_PAUSE_MS
+  const path = [autoSwitches[0]?.from, ...autoSwitches.map(s => s.to)].join(' -> ')
+  autoSwitches = []
+  tell($, `The rotation switched this session ${BOUNCE_MAX} times in a minute (accounts ${path}), so it stops switching here for ${BOUNCE_PAUSE_MS / 60_000} minutes. Use now still switches.`)
+  void patchSession($, { why: `rotation paused after switching ${path} within a minute` })
+  return true
 }
 
 /**
@@ -492,7 +525,7 @@ async function switchTo($: Host, target: Account, why: string, how: SwitchHow = 
     pending: { id: target.id, from: v.pending?.from ?? v.activeId, since: now, ...(isPicked ? { isPicked: true } : {}) },
     removing: undefined,
   }))
-  void patchSession($, { accountId: target.id, isPending: true })
+  void patchSession($, { accountId: target.id, isPending: true, why })
   if (!isQuiet) $.ui.toast(`Switched to Claude account ${label(target)}: ${why}.`, { timeoutMs: 6000 })
   return true
 }

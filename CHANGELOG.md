@@ -2,6 +2,11 @@
 
 What each version of the account rotator changed. To get each one as Claude Code starts, turn on auto-update: in `/plugin`, open **Marketplaces**, pick **claude-account-rotator** and choose **Enable auto-update**. To update by hand, run `claude plugin marketplace update claude-account-rotator`, then `claude plugin update account-rotator@claude-account-rotator`, and start a new session.
 
+## 0.7.3 - 2026-11-23
+
+- **A rotation that goes back and forth stops.** Sessions switched between two accounts several times a second while one of them, whose week resets first, stood at 98%, the line where a session leaves. A reading that moves back and forth across that line does it; what did it here isn't found yet. Now a session whose rotation switches it 3 times within a minute stops switching on its own for 15 minutes, and says so with the accounts it went through. Use now still switches.
+- The coordinator's log, `~/.claude/account-rotator/coordinator.log`, names every move a session makes and why, and a session that stops switching. `PATCH /sessions/:id` takes a `why` for it.
+
 ## 0.7.2 - 2026-11-23
 
 - **Sessions leave Quietdeck's node alone.** Where the node serves the coordinator API (its `/hello` says `quietdeck-node`), a session no longer tries to upgrade it whatever its version, and `cli.ts` won't stop it or install the coordinator beside it: `status` and `start` say the node is running.

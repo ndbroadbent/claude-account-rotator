@@ -90,6 +90,8 @@ type World = {
   hello?: Record<string, unknown>
   /** Every command the mod ran, as argv. */
   ran?: string[][]
+  /** What the coordinator wrote to its log. */
+  logs?: string[]
 }
 
 /** Claude Code's words for a browser call that found no browser, as a session moved off its login gets them. */
@@ -227,7 +229,9 @@ function coordinatorIn(w: World, clock: MockClock, store: Record<string, unknown
     },
     isAlive: () => true,
     save: () => undefined,
-    log: () => undefined,
+    log: text => {
+      ;(w.logs ??= []).push(text)
+    },
   }
   const coordinator = new Coordinator(deps, { version: VERSION, pid: 1, startedAt: NOW, isManaged: false }, persisted(store))
   void coordinator.start()
@@ -2085,4 +2089,43 @@ test('the footer names the model /model picks as soon as it runs, and the contex
   expect(await details(footer)).toBe('Fable 5.2 1M · ctx 85%')
   expect(painted(await footer.find({ key: 'details' }))).toEqual([expect.objectContaining({ color: 'warning' })])
   await footer.unmount()
+})
+
+test('a rotation that goes back and forth stops after three switches in a minute, says so, and the coordinator logs each move', async ($, on) => {
+  const w = fresh()
+  const slot = (id: number) => `${HOME}/.claude/accounts/${id}`
+  w.keychain['Claude Code-credentials'] = blob('tok-1')
+  w.keychain[await keychainItem(slot(2))] = blob('tok-2')
+  w.keychain[await keychainItem(slot(3))] = blob('tok-3')
+  w.usage['tok-1'] = [null, 3, '2026-10-18T03:00:00Z']
+  w.usage['tok-2'] = [null, 11, '2026-10-14T03:00:00Z']
+  w.usage['tok-3'] = [null, 98, '2026-10-13T03:00:00Z']
+  const accounts = [1, 2, 3].map(id => ({ id: String(id), slot: id === 1 ? '' : slot(id), email: `${id}@example.com` }))
+  const clock = world(on, w, { accounts })
+  await start($, clock)
+  expect(w.envSets.map(e => e.value)).toEqual([slot(2)])
+  await clock.advance(61_000)
+  // Account 3's week, which resets first, read as 97% and 98% in turn: each reading moves the session.
+  const coordinator = w.coordinator
+  if (coordinator === undefined) throw new Error('no coordinator')
+  for (let i = 0; i < 8; i++) {
+    coordinator.report('3', { sevenDay: { pct: i % 2 === 0 ? 97 : 98, resetsAt: '2026-10-13T03:00:00Z' }, at: NOW + 61_000 + i * 1_000 })
+    await clock.advance(1_000)
+  }
+  expect(w.envSets.map(e => e.value)).toEqual([slot(2), slot(3), slot(2), slot(3)])
+  expect(w.toasts.filter(t => /^The rotation switched this session 3 times in a minute \(accounts 2 -> 3 -> 2 -> 3\)/.test(t))).toHaveLength(1)
+  // The coordinator's log says what each move was for, and why the session stopped.
+  const moves = (w.logs ?? []).filter(l => l.startsWith(`session pid ${PID}`))
+  expect(moves.slice(-4)).toEqual([
+    `session pid ${PID} in /work: account 2 -> 3 (its week resets before account 2's)`,
+    `session pid ${PID} in /work: account 3 -> 2 (account 3 has 2% of its week left)`,
+    `session pid ${PID} in /work: account 2 -> 3 (its week resets before account 2's)`,
+    `session pid ${PID} in /work: on account 3 (rotation paused after switching 2 -> 3 -> 2 -> 3 within a minute)`,
+  ])
+  // Held for 15 minutes; then it looks again, from account 3 at 98%.
+  coordinator.report('3', { sevenDay: { pct: 98, resetsAt: '2026-10-13T03:00:00Z' }, at: NOW + 80_000 })
+  await clock.advance(10 * 60_000)
+  expect(w.envSets).toHaveLength(4)
+  await clock.advance(6 * 60_000)
+  expect(w.envSets.map(e => e.value).at(-1)).toBe(slot(2))
 })
