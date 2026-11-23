@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, McpToolResult, Register, SessionRateLimit, Timer } from 'claude-code'
 
 import type { Account, FooterStyle, Reading, RotateTo, SharedState, View, Work } from '../types'
-import { VERSION, compareVersions } from '../coordinator/version'
+import { NODE_NAME, VERSION, compareVersions } from '../coordinator/version'
 import {
   CHROME_SERVER,
   CHROME_TOOL,
@@ -163,10 +163,11 @@ async function act($: Host, method: string, path: string, body?: unknown): Promi
 /**
  * Makes sure a coordinator this version or newer runs: starts one where none
  * answers (launchd's, where it is installed), and upgrades an older one.
+ * Quietdeck's node, serving the same API, is left as it is.
  */
 async function ensureCoordinator($: Host): Promise<void> {
-  const hello = await api<{ version: string }>($, 'GET', '/hello').catch(() => undefined)
-  if (hello !== undefined && compareVersions(hello.version, VERSION) >= 0) return
+  const hello = await api<{ name?: string; version: string }>($, 'GET', '/hello').catch(() => undefined)
+  if (hello !== undefined && (hello.name === NODE_NAME || compareVersions(hello.version, VERSION) >= 0)) return
   const verb = hello === undefined ? 'start' : 'upgrade'
   let result
   try {

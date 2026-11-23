@@ -86,6 +86,10 @@ type World = {
   cwd?: string
   /** How full the session's context is, as `$.session.usage()` answers. */
   contextPct?: number
+  /** What GET /hello answers in place of the coordinator's own, as another monitor serving the API would. */
+  hello?: Record<string, unknown>
+  /** Every command the mod ran, as argv. */
+  ran?: string[][]
 }
 
 /** Claude Code's words for a browser call that found no browser, as a session moved off its login gets them. */
@@ -247,6 +251,7 @@ function world(on: On, w: World, store: Record<string, unknown>): MockClock {
     return { value: {} }
   })
   on('process.run', (_$, e) => {
+    ;(w.ran ??= []).push([...e.argv])
     if (e.argv[0] === '/bin/sh') return { value: ran(0, `${PID}\n`) }
     if (e.argv[0] === 'git' && e.argv[1] === '--no-optional-locks' && e.argv[2] === '-C') {
       const repo = w.repos?.[e.argv[3] ?? '']
@@ -264,6 +269,7 @@ function world(on: On, w: World, store: Record<string, unknown>): MockClock {
     // Claude Code aborts a `$.http.fetch` with no answer after 30 s: a long poll must ask for less.
     if (Number(url.searchParams.get('wait') ?? 0) >= 30_000) throw new Error(`a long poll waits past $.http.fetch's 30 s: ${e.url}`)
     const body = e.init.body === undefined ? undefined : JSON.parse(String(e.init.body))
+    if (url.pathname === '/hello' && w.hello !== undefined) return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify(w.hello) } }
     const answer = await coordinator.handle({ method: e.init.method ?? 'GET', path: url.pathname, query: Object.fromEntries(url.searchParams), body })
     return { value: { status: answer.status, ok: answer.status < 300, headers: {}, text: JSON.stringify(answer.body) } }
   })
@@ -839,6 +845,18 @@ test('Rotate now moves to the login with the most room; the one in use is marked
   const ends = (await pane.findAll({ text: /^(Remove|Use now|● in use)$/ })).filter(e => e.type !== 'Box')
   expect(ends.map(e => e.text)).toEqual(['Use now', 'Remove', 'Use now', 'Remove', '● in use'])
   await pane.unmount()
+})
+
+test("Quietdeck's node serving the API is left running, whatever version it says", async ($, on) => {
+  const w = fresh()
+  w.keychain['Claude Code-credentials'] = blob('tok-1')
+  w.usage['tok-1'] = [20, 30]
+  // Older than this mod: a coordinator of the rotator's own would be upgraded (`node cli.ts upgrade`, which the world refuses).
+  w.hello = { name: 'quietdeck-node', version: '0.1.0', pid: 9, startedAt: NOW, isManaged: true }
+  const clock = world(on, w, TWO_LOGINS)
+  await start($, clock)
+  expect(w.coordinator?.state().sessions.length).toBe(1)
+  expect((w.ran ?? []).filter(argv => argv.some(arg => arg.endsWith('/coordinator/cli.ts')))).toEqual([])
 })
 
 test('Remove refuses a login sessions are on while no other login can take them over, and leaves it on the list', async ($, on) => {

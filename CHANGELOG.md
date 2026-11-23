@@ -2,6 +2,11 @@
 
 What each version of the account rotator changed. To get each one as Claude Code starts, turn on auto-update: in `/plugin`, open **Marketplaces**, pick **claude-account-rotator** and choose **Enable auto-update**. To update by hand, run `claude plugin marketplace update claude-account-rotator`, then `claude plugin update account-rotator@claude-account-rotator`, and start a new session.
 
+## 0.7.2 - 2026-11-23
+
+- **Sessions leave Quietdeck's node alone.** Where the node serves the coordinator API (its `/hello` says `quietdeck-node`), a session no longer tries to upgrade it whatever its version, and `cli.ts` won't stop it or install the coordinator beside it: `status` and `start` say the node is running.
+- `cli.ts start` and `install` wait 30 s for the coordinator to answer, up from 15 s: on a busy Mac it took 17 s.
+
 ## 0.7.1 - 2026-11-23
 
 - **`cli.ts install` works on Linux:** it installs the coordinator as a systemd user service, `~/.config/systemd/user/claude-account-rotator.service`, enabled and started, restarted after a crash but not after an upgrade's clean exit, as the LaunchAgent is. With lingering on it runs from boot. `uninstall`, `start`, `upgrade` and `status` know it too.

@@ -23,7 +23,7 @@ HTTP/1.1 over a Unix domain socket:
 
 | Method and path | Body | Answer |
 | --- | --- | --- |
-| `GET /hello` | | `{ name, version, pid, startedAt }` |
+| `GET /hello` | | `{ name, version, pid, startedAt }`. `name` is `claude-account-rotator`, or `quietdeck-node` where Quietdeck's node serves the API. |
 | `GET /state?since=V&wait=MS&session=ID` | | `State`. With `since` equal to the current `version`, the answer waits until the state changes or `wait` ms pass (at most 55000), then answers the current state. `session` marks that session alive. A Claude Code session asks for 25000 at most: `$.http.fetch` aborts after 30 s. |
 | `POST /sessions` | `{ id, pid?, slot, cwd?, isInteractive }` | `{ accountId, state }`. Registers a session on the login whose `slot` it reads; an unknown slot becomes a new login. |
 | `PATCH /sessions/:id` | `{ accountId?, isBlocked?, isPending? }` | `{ state }` |
@@ -40,7 +40,7 @@ HTTP/1.1 over a Unix domain socket:
 | `PATCH /settings` | `{ rotateTo?, footer? }` | `{ state }` |
 | `PATCH /chrome` | `{ accountId?: string \| null, seen?: { accountId, isSeen }, miss?: string \| null }` | `{ state }` |
 | `POST /notices/:id/claim` | `{ sessionId }` | `{ claimed }`. The first claimant posts the desktop notification; the rest only show a toast. |
-| `POST /shutdown` | | `{ ok: true }`, then the process exits (an upgrade). |
+| `POST /shutdown` | | `{ ok: true }`, then the process exits (an upgrade). Quietdeck's node answers 409 and goes on: it runs as long as the node does. |
 
 ## State
 
@@ -134,4 +134,7 @@ each session works that out from this state (`pickTarget` and `soonerTarget` in
 coordinator keeps `settings` and `chrome` for the mod, so every session sees a change
 at once, but doesn't act on them. This is the line along which Quietdeck's node takes
 the coordinator's work over: it serves this API on the same socket, and the mod keeps
-everything about rotating.
+everything about rotating. A session leaves a monitor whose `/hello` says `quietdeck-node`
+as it is, whatever its version, and `cli.ts` won't stop it or install the coordinator
+beside it. While a coordinator holds `coordinator.lock`, the node only follows it, and it
+takes over once that coordinator stops.
