@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { RotateTo, View } from '../types'
-import { DEFAULT_FOOTER, availableNow, braille, browsersFrom, chromeNote, credentialFrom, credentialsFile, footerStyleFrom, healthOf, identityFromProfile, isNoBrowser, isPolicyRefusal, isUnansweredCall, keychainItem, pickTarget, roomOf, scopeOf, spentReading, pie, readingFromUsage, rotateToFrom, shouldLeave, roomColor, soonerTarget, weightOf, windowPct } from './model'
+import { DEFAULT_FOOTER, availableNow, braille, browsersFrom, chromeNote, credentialFrom, credentialsFile, footerStyleFrom, healthOf, identityFromProfile, isNoBrowser, isPolicyRefusal, isNearlySpent, isUnansweredCall, keychainItem, pickTarget, roomOf, scopeOf, spentReading, pie, readingFromUsage, rotateToFrom, shouldLeave, roomColor, soonerTarget, weightOf, windowPct } from './model'
 
 const NOW = Date.parse('2026-10-12T10:00:00Z')
 const LATER = '2026-10-12T12:00:00Z'
@@ -35,6 +35,21 @@ test('leaves at 90% of the 5-hour window or 98% of the week, and not before', ()
   expect(shouldLeave(view({ '1': [90, 10] }), NOW)).toBe(true)
   expect(shouldLeave(view({ '1': [10, 98] }), NOW)).toBe(true)
   expect(shouldLeave(view({ '1': [0, 0] }, { '1': { kind: 'login-needed', why: 'x' } }), NOW)).toBe(true)
+})
+
+test('a login counts as nearly spent within 3 points of a leave mark, and not once its window has reset', () => {
+  const at = (five: number | undefined, week: number, resetsAt = '2026-10-13T03:00:00Z') => ({
+    ...(five === undefined ? {} : { fiveHour: { pct: five, resetsAt } }),
+    sevenDay: { pct: week, resetsAt },
+    at: NOW,
+  })
+  expect(isNearlySpent(at(undefined, 94.9), NOW)).toBe(false)
+  expect(isNearlySpent(at(undefined, 95), NOW)).toBe(true)
+  expect(isNearlySpent(at(87, 10), NOW)).toBe(true)
+  expect(isNearlySpent(at(86, 10), NOW)).toBe(false)
+  expect(isNearlySpent(at(undefined, 97, '2026-10-01T00:00:00Z'), NOW)).toBe(false)
+  expect(isNearlySpent({ sevenDay: { pct: 10 }, models: { Fable: { pct: 96 } }, at: NOW }, NOW, 'Fable')).toBe(true)
+  expect(isNearlySpent({ sevenDay: { pct: 10 }, models: { Fable: { pct: 96 } }, at: NOW }, NOW)).toBe(false)
 })
 
 test('picks the signed-in login with the most room, never a spent or locked one', () => {

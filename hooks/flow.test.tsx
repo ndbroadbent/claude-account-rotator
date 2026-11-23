@@ -2105,11 +2105,11 @@ test('a rotation that goes back and forth stops after three switches in a minute
   await start($, clock)
   expect(w.envSets.map(e => e.value)).toEqual([slot(2)])
   await clock.advance(61_000)
-  // Account 3's week, which resets first, read as 97% and 98% in turn: each reading moves the session.
+  // Account 3's week, which resets first, read as 90% and 98% in turn: well below the line, then over it, each reading moves the session.
   const coordinator = w.coordinator
   if (coordinator === undefined) throw new Error('no coordinator')
   for (let i = 0; i < 8; i++) {
-    coordinator.report('3', { sevenDay: { pct: i % 2 === 0 ? 97 : 98, resetsAt: '2026-10-13T03:00:00Z' }, at: NOW + 61_000 + i * 1_000 })
+    coordinator.report('3', { sevenDay: { pct: i % 2 === 0 ? 90 : 98, resetsAt: '2026-10-13T03:00:00Z' }, at: NOW + 61_000 + i * 1_000 })
     await clock.advance(1_000)
   }
   expect(w.envSets.map(e => e.value)).toEqual([slot(2), slot(3), slot(2), slot(3)])
@@ -2128,4 +2128,36 @@ test('a rotation that goes back and forth stops after three switches in a minute
   expect(w.envSets).toHaveLength(4)
   await clock.advance(6 * 60_000)
   expect(w.envSets.map(e => e.value).at(-1)).toBe(slot(2))
+})
+
+test('a session that left a full account stays away while its reading wavers on the line, and goes back once it drops', async ($, on) => {
+  const w = fresh()
+  const slot = (id: number) => `${HOME}/.claude/accounts/${id}`
+  w.keychain['Claude Code-credentials'] = blob('tok-1')
+  w.keychain[await keychainItem(slot(2))] = blob('tok-2')
+  w.keychain[await keychainItem(slot(3))] = blob('tok-3')
+  w.usage['tok-1'] = [null, 3, '2026-10-18T03:00:00Z']
+  w.usage['tok-2'] = [null, 11, '2026-10-14T03:00:00Z']
+  w.usage['tok-3'] = [null, 98, '2026-10-13T03:00:00Z']
+  const accounts = [1, 2, 3].map(id => ({ id: String(id), slot: id === 1 ? '' : slot(id), email: `${id}@example.com` }))
+  const clock = world(on, w, { accounts })
+  await start($, clock)
+  expect(w.envSets.map(e => e.value)).toEqual([slot(2)])
+  await clock.advance(61_000)
+  // Account 3's week, which resets first, read as 97% and 98% in turn.
+  const coordinator = w.coordinator
+  if (coordinator === undefined) throw new Error('no coordinator')
+  const read = async (pct: number, t: number) => {
+    coordinator.report('3', { sevenDay: { pct, resetsAt: '2026-10-13T03:00:00Z' }, at: NOW + t })
+    await clock.advance(1_000)
+  }
+  for (let i = 0; i < 8; i++) await read(i % 2 === 0 ? 97 : 98, 61_000 + i * 1_000)
+  // 97% moves it there, 98% moves it off, and from then on it keeps away.
+  expect(w.envSets.map(e => e.value)).toEqual([slot(2), slot(3), slot(2)])
+  expect(w.toasts.filter(t => t.startsWith('The rotation switched this session'))).toEqual([])
+  // Once the week reads 3 points below the line, the session goes back to the week that resets first.
+  await read(95, 80_000)
+  expect(w.envSets).toHaveLength(3)
+  await read(94, 81_000)
+  expect(w.envSets.map(e => e.value).at(-1)).toBe(slot(3))
 })

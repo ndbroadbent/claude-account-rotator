@@ -4,6 +4,13 @@ import type { Account, CombinedWindow, Fill, FooterStyle, Glyphs, Health, Highli
 export const LEAVE_FIVE_HOUR = 90
 /** Leave a login once its weekly window is this full (percent). */
 export const LEAVE_SEVEN_DAY = 98
+/**
+ * A login a session left because it filled stays out of that session's
+ * rotation until each window it filled is this many points below its leave
+ * mark (or has reset): a reading that wavers on the mark doesn't move the
+ * session back and forth.
+ */
+export const RETURN_MARGIN = 3
 /** Warn this long before a login's refresh token runs out. */
 export const SIGN_IN_WARN_MS = 3 * 24 * 3600_000
 
@@ -94,6 +101,15 @@ export function isSpent(r: Reading | undefined, now: number, scope?: string): bo
     (windowPct(r?.fiveHour, now) ?? 0) >= LEAVE_FIVE_HOUR ||
     (windowPct(r?.sevenDay, now) ?? 0) >= LEAVE_SEVEN_DAY ||
     (windowPct(modelWindow(r, scope), now) ?? 0) >= LEAVE_SEVEN_DAY
+  )
+}
+
+/** Within RETURN_MARGIN of a leave mark: a login a session left full isn't gone back to while this holds. */
+export function isNearlySpent(r: Reading | undefined, now: number, scope?: string): boolean {
+  return (
+    (windowPct(r?.fiveHour, now) ?? 0) >= LEAVE_FIVE_HOUR - RETURN_MARGIN ||
+    (windowPct(r?.sevenDay, now) ?? 0) >= LEAVE_SEVEN_DAY - RETURN_MARGIN ||
+    (windowPct(modelWindow(r, scope), now) ?? 0) >= LEAVE_SEVEN_DAY - RETURN_MARGIN
   )
 }
 

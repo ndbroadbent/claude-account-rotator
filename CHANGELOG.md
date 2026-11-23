@@ -2,6 +2,10 @@
 
 What each version of the account rotator changed. To get each one as Claude Code starts, turn on auto-update: in `/plugin`, open **Marketplaces**, pick **claude-account-rotator** and choose **Enable auto-update**. To update by hand, run `claude plugin marketplace update claude-account-rotator`, then `claude plugin update account-rotator@claude-account-rotator`, and start a new session.
 
+## 0.7.4 - 2026-11-23
+
+- **A session keeps away from an account it left full until the account has room again.** Once the rotation moves a session off an account because it filled (98% of its week, its Fable week for a Fable session, or 90% of a 5-hour window), it doesn't send that session back until the account reads 3 points below that line or the window resets. This ends the back-and-forth 0.7.3 cut short: an account whose week resets first and whose reading wavered between 97% and 98% pulled sessions back on every 97%. **Use now** still moves to it.
+
 ## 0.7.3 - 2026-11-23
 
 - **A rotation that goes back and forth stops.** Sessions switched between two accounts several times a second while one of them, whose week resets first, stood at 98%, the line where a session leaves. A reading that moves back and forth across that line does it; what did it here isn't found yet. Now a session whose rotation switches it 3 times within a minute stops switching on its own for 15 minutes, and says so with the accounts it went through. Use now still switches.

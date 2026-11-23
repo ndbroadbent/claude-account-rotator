@@ -20,6 +20,8 @@ import {
   readingFromLimits,
   sameUsage,
   modelWindow,
+  isNearlySpent,
+  isSpent,
   shouldLeave,
   viewScope,
   soonerTarget,
@@ -94,6 +96,8 @@ let isPaneShown = false
 let held: { target: Account; why: string; how: SwitchHow; timer: Timer } | undefined
 /** Logins a switch to did not take this session: the rotation leaves them be; Use now still tries. */
 const untaken = new Set<string>()
+/** Logins this session left because they filled: the rotation keeps away until their readings drop (isNearlySpent). */
+const leftFull = new Set<string>()
 /** When this session last moved to another login: until SETTLE_MS after, its requests may still go out as the one before. */
 let movedAt: number | undefined
 /** When this session last sent a model request: Claude Code reads its sign-in again just before one. */
@@ -396,7 +400,9 @@ function whyLeave(view: View, now: number): string {
  * switch didn't take here.
  */
 function targetFor(view: View, now: number): Account | undefined {
-  const own = { ...view, accounts: view.accounts.filter(a => !untaken.has(a.id)) }
+  const scope = viewScope(view)
+  for (const id of leftFull) if (!isNearlySpent(view.readings[id], now, scope)) leftFull.delete(id)
+  const own = { ...view, accounts: view.accounts.filter(a => !untaken.has(a.id) && !leftFull.has(a.id)) }
   return shouldLeave(view, now) ? pickTarget(own, now) : soonerTarget(own, now)
 }
 
@@ -436,8 +442,16 @@ async function rotateOnce($: Host, isOpening: boolean): Promise<boolean> {
   const how = { isOpening: isOpening || held?.how.isOpening === true }
   const from = view.activeId
   const moved = await switchTo($, target, isLeaving ? whyLeave(view, now) : `its week resets before account ${view.activeId}'s`, how)
-  if (moved) autoSwitches.push({ at: now, from, to: target.id })
+  if (moved) {
+    autoSwitches.push({ at: now, from, to: target.id })
+    noteLeft(view, now)
+  }
   return moved
+}
+
+/** A login the session leaves because it filled is kept away from until its reading drops. */
+function noteLeft(view: View, now: number): void {
+  if (isSpent(view.readings[view.activeId], now, viewScope(view))) leftFull.add(view.activeId)
 }
 
 /**
@@ -1009,7 +1023,7 @@ async function leaveVisit($: Host, from: Account, isPicked: boolean): Promise<vo
     return
   }
   const target = targetFor(fromView, now)
-  if (target !== undefined) await switchTo($, target, whyLeave(fromView, now))
+  if (target !== undefined && (await switchTo($, target, whyLeave(fromView, now)))) noteLeft(fromView, now)
 }
 
 /**
@@ -1108,6 +1122,8 @@ function actions($: Host): Actions {
         getView($).then(view => {
           const account = view.accounts.find(a => a.id === id)
           if (account === undefined) return false
+          // A pick of the person's lets the rotation come back to the login, whatever it reads.
+          leftFull.delete(account.id)
           return switchTo($, account, 'you picked it', { isPicked: true })
         }),
       ),

@@ -1,5 +1,5 @@
 /** The mod's and the coordinator's version: a session whose mod is newer than the running coordinator upgrades it. */
-export const VERSION = '0.7.3'
+export const VERSION = '0.7.4'
 
 /**
  * What GET /hello names Quietdeck's node, which serves this API in place of the coordinator and runs for as long
