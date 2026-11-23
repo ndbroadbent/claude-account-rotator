@@ -34,7 +34,7 @@ HTTP/1.1 over a Unix domain socket:
 | `POST /accounts/:id/check` | `{ fresh? }` | `{ state }`. Re-reads the sign-in now, and with `fresh` the usage too (at most once per 30 s per login). |
 | `POST /check` | | `{ state }`. Re-reads every login now. |
 | `POST /accounts` | | `{ accountId, state }`. Adds a login in a new slot and starts its browser sign-in. |
-| `POST /accounts/:id/remove` | | `{ state }`. Sessions on it move off, then it is signed out and dropped. |
+| `POST /accounts/:id/remove` | | `{ state }`. Marks it `isRetiring`; once no session is on it, it is signed out and dropped. Moving its sessions off is the mod's: it asks only when another login can take them over. |
 | `POST /signin` | `{ accountId? }` | `{ state }`. Starts the browser sign-in of one login, or of every login that needs one. |
 | `POST /signin/cancel` | | `{ state }` |
 | `PATCH /settings` | `{ rotateTo?, footer? }` | `{ state }` |
@@ -87,13 +87,8 @@ type AccountState = {
   holder?: { token: string; who: { email: string; orgId?: string; orgName?: string; plan?: string } }
   /** When its access token expires, epoch ms. */
   expiresAt?: number
-  /** Past the leave thresholds (90% of the 5-hour window, or 98% of the week). A model's own week doesn't count here. */
-  isSpent: boolean
+  /** Being removed: signed out and dropped once no session is on it. */
   isRetiring?: boolean
-  /** Where sessions on this login go once they must leave it; absent while they can stay or none can take over. */
-  moveTo?: string
-  /** The same for sessions on a model with a week of its own, by its name: they leave once either week is at 98%. */
-  moveToFor?: Record<string, string>
   /** Live sessions on it. */
   sessionCount: number
 }
@@ -130,3 +125,13 @@ type FooterStyle = {
 
 A window's `pct` is as last read: a client should count it as 0 once `resetsAt` has
 passed.
+
+## What the coordinator doesn't decide
+
+The coordinator knows the logins; it never decides where a session goes. Since 0.7.0
+each session works that out from this state (`pickTarget` and `soonerTarget` in
+`hooks/model.ts`): every session reads the same state, so they pick alike. The
+coordinator keeps `settings` and `chrome` for the mod, so every session sees a change
+at once, but doesn't act on them. This is the line along which Quietdeck's node takes
+the coordinator's work over: it serves this API on the same socket, and the mod keeps
+everything about rotating.

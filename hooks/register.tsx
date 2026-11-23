@@ -247,8 +247,6 @@ async function applyState($: Host, state: SharedState, activeId?: string): Promi
       health: pick(a => a.health),
       holders: pick(a => a.holder),
       expiresAt: pick(a => a.expiresAt),
-      moveTo: pick(a => a.moveTo),
-      moveToFor: byModel(state.accounts),
       retiring: state.accounts.filter(a => a.isRetiring).map(a => a.id),
       sessionCounts: pick(a => a.sessionCount),
       combined: state.combined,
@@ -261,13 +259,6 @@ async function applyState($: Host, state: SharedState, activeId?: string): Promi
     }
   })
   await showNotices($, state)
-}
-
-/** Each account's moveToFor turned around: by model, then by account. */
-function byModel(accounts: SharedState['accounts']): Record<string, Record<string, string>> {
-  const out: Record<string, Record<string, string>> = {}
-  for (const a of accounts) for (const [model, to] of Object.entries(a.moveToFor ?? {})) (out[model] ??= {})[a.id] = to
-  return out
 }
 
 async function showNotices($: Host, state: SharedState): Promise<void> {
@@ -387,13 +378,11 @@ function whyLeave(view: View, now: number): string {
 
 /**
  * Where a session goes, once it must leave the login it is on or, with
- * 'soonest reset', once another login's week resets sooner: the coordinator's
- * pick, else its own without the logins a switch didn't take here.
+ * 'soonest reset', once another login's week resets sooner: every session
+ * picks from the same shared state, so they agree, leaving out the logins a
+ * switch didn't take here.
  */
 function targetFor(view: View, now: number): Account | undefined {
-  const scope = viewScope(view)
-  const shared = scope === undefined ? view.moveTo?.[view.activeId] : view.moveToFor?.[scope]?.[view.activeId]
-  if (shared !== undefined && !untaken.has(shared)) return view.accounts.find(a => a.id === shared)
   const own = { ...view, accounts: view.accounts.filter(a => !untaken.has(a.id)) }
   return shouldLeave(view, now) ? pickTarget(own, now) : soonerTarget(own, now)
 }
@@ -1045,8 +1034,20 @@ async function rotate($: Host): Promise<void> {
   else await switchTo($, target, 'you pressed Rotate now')
 }
 
+/**
+ * Remove: the coordinator signs a login out once no session is on it, so a
+ * login sessions use goes only while another can take them over, as a session
+ * on any model would pick.
+ */
 async function removeAccount($: Host, id: string): Promise<void> {
-  await setView($, v => ({ ...v, removing: undefined }))
+  const view = await setView($, v => ({ ...v, removing: undefined }))
+  const count = view.sessionCounts?.[id] ?? 0
+  const { model: _model, ...anyModel } = view
+  const target = pickTarget({ ...anyModel, activeId: id, retiring: [...(view.retiring ?? []), id] }, await $.clock.now())
+  if (count > 0 && target === undefined) {
+    tell($, `Claude account ${id} is in use by ${count} session${count === 1 ? '' : 's'} and no other account can take over yet; not removed.`)
+    return
+  }
   try {
     await act($, 'POST', `/accounts/${id}/remove`)
   } catch (error) {

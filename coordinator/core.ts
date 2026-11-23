@@ -1,7 +1,8 @@
 // The coordinator: the one process that holds what every session shares. It
 // reads each login's sign-in, polls usage once per login (not once per session),
-// runs browser sign-ins one at a time, keeps the settings, counts the sessions
-// on each login and says where sessions on a spent login go. Sessions and the
+// runs browser sign-ins one at a time, keeps the settings and counts the
+// sessions on each login. Where a session goes is the mod's to decide, from
+// this state (Quietdeck's node takes this file's work over). Sessions and the
 // menu bar app reach it over HTTP on a Unix socket (server.ts); this file is
 // plain TypeScript with everything outside it passed in, so tests drive it
 // in memory.
@@ -19,12 +20,10 @@ import type {
   SessionInfo,
   SharedState,
   UsageWindow,
-  View,
 } from '../types/index.d.ts'
 import {
   DEFAULT_FOOTER,
   DEFAULT_ROTATE_TO,
-  EMPTY_VIEW,
   ROTATE_TOS,
   combinedUsage,
   fingerprint,
@@ -35,12 +34,9 @@ import {
   isLoginOf,
   isSpent,
   label,
-  pickTarget,
   readingFromUsage,
   rotateToFrom,
   sameLogin,
-  shouldLeave,
-  soonerTarget,
   spentReading,
   weightOf,
 } from '../hooks/model.ts'
@@ -241,21 +237,6 @@ export class Coordinator {
     this.deps.save({ accounts: this.accounts, readings: this.readings, health, holders: this.holders, settings: this.settings, chrome: this.chrome })
   }
 
-  /** The view the model's functions read, from the coordinator's side: every login, no session's own. */
-  private view(activeId: string): View {
-    return {
-      ...EMPTY_VIEW,
-      accounts: this.accounts,
-      readings: this.readings,
-      health: this.health,
-      holders: this.holders,
-      rotateTo: this.settings.rotateTo,
-      footer: this.settings.footer,
-      retiring: [...this.retiring],
-      activeId,
-    }
-  }
-
   private liveSessions(): SessionInfo[] {
     return [...this.sessions.values()]
   }
@@ -264,31 +245,11 @@ export class Coordinator {
     return this.liveSessions().filter(s => s.accountId === accountId).length
   }
 
-  /**
-   * Where sessions on a login go: once they must leave it, or with 'soonest
-   * reset' once another's week resets sooner. `scope` is a model with a week of
-   * its own (Fable): its sessions also leave once that week is spent.
-   */
-  moveTo(accountId: string, now = this.deps.now(), scope?: string): string | undefined {
-    const view = { ...this.view(accountId), ...(scope === undefined ? {} : { model: scope }) }
-    return shouldLeave(view, now) ? pickTarget(view, now)?.id : soonerTarget(view, now)?.id
-  }
-
-  /** The model weeks any login reports, by name. */
-  private scopes(): string[] {
-    return [...new Set(Object.values(this.readings).flatMap(r => Object.keys(r.models ?? {})))].sort()
-  }
-
   state(): SharedState {
     const now = this.deps.now()
     const accounts: AccountState[] = this.accounts.map(a => {
       const reading = this.readings[a.id]
       const holder = this.holders[a.id]
-      const moveTo = this.moveTo(a.id, now)
-      const moveToFor = Object.fromEntries(this.scopes().flatMap(scope => {
-        const to = this.moveTo(a.id, now, scope)
-        return to === undefined ? [] : [[scope, to]]
-      }))
       return {
         ...a,
         health: this.health[a.id] ?? { kind: 'login-needed', why: 'not read yet' },
@@ -296,10 +257,7 @@ export class Coordinator {
         ...(holder === undefined ? {} : { holder }),
         ...(this.expiresAt[a.id] === undefined ? {} : { expiresAt: this.expiresAt[a.id] }),
         weight: weightOf(a),
-        isSpent: isSpent(reading, now),
         ...(this.retiring.has(a.id) ? { isRetiring: true } : {}),
-        ...(moveTo === undefined ? {} : { moveTo }),
-        ...(Object.keys(moveToFor).length === 0 ? {} : { moveToFor }),
         sessionCount: this.sessionCount(a.id),
       }
     })
@@ -671,18 +629,14 @@ export class Coordinator {
     return id
   }
 
-  /** Removes a login: sessions on it move off first, then it is signed out and dropped. */
+  /**
+   * Removes a login: it is signed out and dropped once no session is on it.
+   * Moving its sessions off is the mod's work, which refuses a removal no other
+   * login can take over from.
+   */
   async remove(id: string): Promise<void> {
     const account = this.need(id)
     if (account.slot === '') throw new HttpError(400, "Claude Code's own login can't be removed; sign it in to another account with /login instead.")
-    const count = this.sessionCount(id)
-    if (count > 0) {
-      const view = this.view(id)
-      const target = pickTarget({ ...view, retiring: [...this.retiring, id] }, this.deps.now())
-      if (target === undefined) {
-        throw new HttpError(409, `Claude account ${id} is in use by ${count} session${count === 1 ? '' : 's'} and no other account can take over yet; not removed.`)
-      }
-    }
     this.retiring.add(id)
     this.changed()
     await this.finishRetirements()

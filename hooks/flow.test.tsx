@@ -841,6 +841,27 @@ test('Rotate now moves to the login with the most room; the one in use is marked
   await pane.unmount()
 })
 
+test('Remove refuses a login sessions are on while no other login can take them over, and leaves it on the list', async ($, on) => {
+  const w = fresh()
+  w.keychain['Claude Code-credentials'] = blob('tok-1')
+  w.keychain[await keychainItem(SLOT2)] = blob('tok-2')
+  w.usage['tok-1'] = [null, 99]
+  w.usage['tok-2'] = [null, 30]
+  const clock = world(on, w, TWO_LOGINS)
+  await start($, clock)
+  // Login 1's week is spent, so this session moved to login 2, the only one with room.
+  expect(w.envSets).toEqual([{ name: 'CLAUDE_SECURESTORAGE_CONFIG_DIR', value: SLOT2 }])
+  const pane = await $.ui.mount({ plugin: 'account-rotator', surface: 'terminal', component: 'Pane', requestId: 'claude-accounts', props: PANE_PROPS })
+  await pane.press({ key: 'ask-remove-2' })
+  await clock.settle()
+  await pane.redraw()
+  await pane.press({ key: 'remove-2' })
+  await clock.settle()
+  expect(w.toasts.filter(t => /^Claude account 2 is in use by 1 session and no other account can take over yet; not removed\.$/.test(t))).toHaveLength(1)
+  expect(w.coordinator?.state().accounts.find(a => a.id === '2')?.isRetiring).toBeUndefined()
+  await pane.unmount()
+})
+
 test('with next in list picked, Rotate now moves to the login after the one in use, not the one with the most room', async ($, on) => {
   const w = fresh()
   const SLOT3 = '/Users/tester/.claude/accounts/3'

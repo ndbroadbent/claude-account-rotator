@@ -20,8 +20,9 @@ import Testing
     let resetsAt = try #require(first.reading?.fiveHour?.resetsAt)
     #expect(resetsAt.timeIntervalSince(try #require(state.now)) == 80 * 60)
 
-    #expect(state.accounts[1].isSpent)
-    #expect(state.accounts[1].moveTo == "1")
+    // 93% of its 5-hour window: past the 90% the mod leaves at.
+    #expect(state.accounts[1].isSpent(at: try #require(state.now)))
+    #expect(!first.isSpent(at: try #require(state.now)))
     #expect(state.accounts[1].orgName == "Example Studio")
     #expect(state.accounts[2].health == .loginNeeded(why: "Claude rejected its sign-in: the refresh token has expired."))
     #expect(state.hasLoginNeeded)
@@ -83,7 +84,6 @@ import Testing
     let account = try #require(state.accounts.first)
     #expect(account.id == "2")
     #expect(account.weight == 1)
-    #expect(account.isSpent == false)
     #expect(account.sessionCount == 4)
     #expect(account.reading?.fiveHour == UsageWindow(pct: 40, resetsAt: nil))
   }
@@ -115,5 +115,18 @@ import Testing
     #expect(throws: DecodingError.self) {
       try CoordinatorState.decode(Data(#"{"error": "No such thing."}"#.utf8))
     }
+  }
+
+  @Test func spentAtTheModsThresholdsAndNotOnceAWindowHasReset() throws {
+    let json = #"""
+      {"version": 1, "accounts": [
+        {"id": "1", "reading": {"sevenDay": {"pct": 98, "resetsAt": "2026-11-14T08:00:00Z"}, "at": 1794218400000}},
+        {"id": "2", "reading": {"sevenDay": {"pct": 97.9}, "fiveHour": {"pct": 89}, "at": 1794218400000}},
+        {"id": "3", "reading": {"fiveHour": {"pct": 95, "resetsAt": "2026-11-09T09:00:00Z"}, "at": 1794218400000}},
+        {"id": "4", "reading": {"sevenDay": {"pct": 10}, "models": {"Fable": {"pct": 100}}, "at": 1794218400000}}]}
+      """#
+    let state = try CoordinatorState.decode(Data(json.utf8))
+    let now = Date(epochMs: 1_794_218_400_000)  // 9 November 2026, 10:00 UTC
+    #expect(state.accounts.map { $0.isSpent(at: now) } == [true, false, false, false])
   }
 }

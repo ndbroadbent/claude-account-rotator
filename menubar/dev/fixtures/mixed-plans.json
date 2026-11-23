@@ -32,7 +32,6 @@
         }
       },
       "expiresAt": 1794240000000,
-      "isSpent": false,
       "sessionCount": 12
     },
     {
@@ -56,8 +55,6 @@
         "at": 1794218360000
       },
       "expiresAt": 1794229200000,
-      "isSpent": true,
-      "moveTo": "1",
       "sessionCount": 0
     },
     {
@@ -79,7 +76,6 @@
         },
         "at": 1794207600000
       },
-      "isSpent": false,
       "sessionCount": 0
     }
   ],

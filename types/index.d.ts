@@ -79,7 +79,7 @@ export type FooterRun = { text: string; color?: string; lit?: string; background
 /** The coordinator's own details, as it answers them. */
 export type CoordinatorInfo = { version: string; pid: number; startedAt: number; isManaged: boolean }
 
-/** One login as the coordinator shares it: the login, what it knows of it, and what follows from that. */
+/** One login as the coordinator shares it: the login and what it knows of it. Where its sessions go is the mod's to work out. */
 export type AccountState = Account & {
   health: Health
   reading?: Reading
@@ -88,14 +88,8 @@ export type AccountState = Account & {
   expiresAt?: number
   /** The plan's size: 10 for Ultra (formerly Max 20x), 5 for Max (formerly Max 5x), 1 for Pro or unknown. */
   weight: number
-  /** Past the leave thresholds. */
-  isSpent: boolean
   /** Being removed: sessions on it move off, then it is signed out and dropped. */
   isRetiring?: boolean
-  /** Where sessions on it go once they must leave it; absent while they can stay or none can take over. */
-  moveTo?: string
-  /** The same for sessions on a model with its own week (`Fable`), by the model's name: they leave once either week is spent. */
-  moveToFor?: Record<string, string>
   /** Live sessions on it. */
   sessionCount: number
 }
@@ -149,10 +143,6 @@ export type View = {
   holders: Record<string, Holder>
   /** When each login's access token expires, as the coordinator last read it. */
   expiresAt?: Record<string, number>
-  /** Where the coordinator sends sessions on each login that must leave it. */
-  moveTo?: Record<string, string>
-  /** The same for sessions on a model with its own week, by the model's name, then by login. */
-  moveToFor?: Record<string, Record<string, string>>
   /** This session's model, as `/model` shows it: a model with its own week (Fable) also leaves a login once that week is spent. */
   model?: string
   /** This session only: the branch it works on, in the directory its Bash commands last moved to (else its own); absent outside a repository. */

@@ -2,6 +2,14 @@
 
 What each version of the account rotator changed. To get each one as Claude Code starts, turn on auto-update: in `/plugin`, open **Marketplaces**, pick **claude-account-rotator** and choose **Enable auto-update**. To update by hand, run `claude plugin marketplace update claude-account-rotator`, then `claude plugin update account-rotator@claude-account-rotator`, and start a new session.
 
+## 0.7.0 - 2026-11-23
+
+Each session now decides where it goes; the coordinator only knows the accounts. This is the first step of moving the coordinator's work into Quietdeck's node, which will serve the same API.
+
+- **The coordinator no longer picks where sessions move.** Its state drops `moveTo`, `moveToFor` and `isSpent`. Every session already worked the same pick out from the same state when it had to, so where sessions go doesn't change.
+- **Remove refuses in the session.** Removing an account sessions are on, while no other account can take them over, says so in the session that asked, as the coordinator did before. The coordinator now retires an account it's asked to remove and drops it once no session is on it.
+- **The menu bar app marks an account Spent from its percentages,** at the same 90% of the 5-hour window or 98% of the week. Its tooltip no longer names the account sessions move to.
+
 ## 0.6.6 - 2026-11-21
 
 Fixes ported from upstream (ivokund/claude-account-rotator 0.3.1 to 0.5.1), reworked for the coordinator:

@@ -56,11 +56,11 @@ Every session talks to one coordinator process over a Unix socket, `~/.claude/ac
 - reads each account's sign-in and polls its usage once for all sessions: an account's usage at most every 5 minutes, and less while sessions on it report the usage their responses carry;
 - keeps reading the usage of an account no session is on: only Claude Code refreshes an account's sign-in, as a session sends a request, so once such an account's token expires the coordinator runs `claude -p /usage` as that account, which refreshes it without a model request (an account with sessions on it is left to them);
 - tells every session about each change as it happens (a long poll), so the footers stay in step;
-- says where sessions on a spent account go, runs browser sign-ins one at a time, and keeps the settings and the Chrome account;
+- runs browser sign-ins one at a time, and keeps the settings and the Chrome account;
 - knows which sessions are on which account: the panel shows the count beside each account;
 - shows a notice, such as an account needing a sign-in, in every session, and has one session post the desktop notification.
 
-What only a session can do stays in the session: pointing its own requests at an account, reading its responses' usage, and Claude in Chrome.
+Where a session goes is the session's own decision, made from the coordinator's state, so every session picks alike. What only a session can do stays in the session too: pointing its own requests at an account, reading its responses' usage, and Claude in Chrome.
 
 The first session that needs the coordinator starts it in the background, and it exits once no session has used it for 30 minutes. To keep it running from login (the menu bar app needs this), install it as a LaunchAgent on macOS:
 

@@ -124,9 +124,8 @@ struct AccountRow: View {
       markers.append(
         Marker(id: "chrome", text: "Chrome", systemImage: "globe", tint: .teal, help: "Claude in Chrome uses this login"))
     }
-    if account.isSpent {
-      let help = account.moveTo.map { "Past its limits: sessions move to account \($0)" } ?? "Past its limits"
-      markers.append(Marker(id: "spent", text: "Spent", systemImage: "hourglass", tint: .red, help: help))
+    if account.isSpent(at: now) {
+      markers.append(Marker(id: "spent", text: "Spent", systemImage: "hourglass", tint: .red, help: "Past its limits"))
     }
     if account.isRetiring {
       markers.append(

@@ -4,6 +4,7 @@ import { describe, test } from 'node:test'
 import type { Persisted, SignInRun, Stored, UsageAnswer } from './core.ts'
 import { BACKOFF_MS, Coordinator, FRESH_MS, MAX_WAIT_MS, POLL_MS, REFRESH_RETRY_MS, STALE_SESSION_MS, TICK_MS } from './core.ts'
 import { retryAfter } from './server.ts'
+import { isSpent } from '../hooks/model.ts'
 import type { Identity } from '../hooks/model.ts'
 
 const NOW = Date.parse('2026-11-09T10:00:00Z')
@@ -281,33 +282,17 @@ describe('expired sign-ins', () => {
   })
 })
 
-describe('rotation', () => {
-  test('sessions on a spent login go to the login whose week resets soonest; none when all are spent', async () => {
+describe('limits', () => {
+  test("a session's reading replaces the login's, and shares no move decision: the mods pick where sessions go", async () => {
     const w = new World()
     const c = await started(w, threeLogins(w))
-    assert.equal(account(c, '1').moveTo, undefined)
     c.report('1', { fiveHour: { pct: 95, resetsAt: '2026-11-09T12:00:00Z' }, at: w.now + 1 })
-    assert.equal(account(c, '1').isSpent, true)
-    assert.equal(account(c, '1').moveTo, '2', 'same resets: the most room breaks the tie')
-    c.report('2', { fiveHour: { pct: 92 }, at: w.now + 1 })
-    c.report('3', { fiveHour: { pct: 99 }, at: w.now + 1 })
-    assert.equal(account(c, '1').moveTo, undefined)
-  })
-
-  test('with soonest reset, sessions on a login with room go to one whose week resets over an hour sooner', async () => {
-    const w = new World()
-    const c = await started(w, threeLogins(w))
-    // Every week resets together.
-    assert.equal(account(c, '1').moveTo, undefined)
-    c.report('2', { sevenDay: { pct: 0, resetsAt: '2026-11-12T03:00:00Z' }, at: w.now + 1 })
-    assert.equal(account(c, '1').moveTo, '2')
-    assert.equal(account(c, '3').moveTo, '2')
-    assert.equal(account(c, '2').moveTo, undefined)
-    // Half an hour sooner than login 2's is not enough to move for.
-    c.report('3', { sevenDay: { pct: 10, resetsAt: '2026-11-12T03:30:00Z' }, at: w.now + 1 })
-    assert.equal(account(c, '3').moveTo, undefined)
-    c.patchSettings({ rotateTo: 'room' })
-    assert.equal(account(c, '1').moveTo, undefined)
+    assert.equal(account(c, '1').reading?.fiveHour?.pct, 95)
+    assert.equal(isSpent(account(c, '1').reading, w.now), true)
+    assert.deepEqual(
+      Object.keys(account(c, '1')).filter(k => ['moveTo', 'moveToFor', 'isSpent'].includes(k)),
+      [],
+    )
   })
 
   test('a turn that hits the limit before the usage shows it counts the 5-hour window full, with one usage call for many sessions', async () => {
@@ -318,7 +303,6 @@ describe('rotation', () => {
     await Promise.all([c.spent('1'), c.spent('1'), c.spent('1')])
     assert.deepEqual(w.usageCalls, ['t1'])
     assert.equal(account(c, '1').reading?.fiveHour?.pct, 100)
-    assert.equal(account(c, '1').moveTo, '2')
   })
 
   test('with only a weekly limit, a turn that hits it counts the week full', async () => {
@@ -330,7 +314,7 @@ describe('rotation', () => {
     await w.advance(FRESH_MS)
     await c.spent('1')
     assert.equal(account(c, '1').reading?.sevenDay?.pct, 100)
-    assert.equal(account(c, '1').isSpent, true)
+    assert.equal(isSpent(account(c, '1').reading, w.now), true)
     assert.equal(c.state().combined.fiveHour, undefined)
   })
 
@@ -349,17 +333,13 @@ describe('rotation', () => {
 })
 
 describe('model weeks', () => {
-  test('a login\'s Fable week sends Fable sessions on alone, and a response\'s reading keeps it', async () => {
+  test('a login\'s Fable week is read from the usage endpoint, and a response\'s reading keeps it', async () => {
     const w = new World()
     const persisted = threeLogins(w)
     w.usage = { t1: [null, 30], t2: [null, 50], t3: [null, 70] }
     w.fable = { t1: 99, t2: 10, t3: 40 }
     const c = await started(w, persisted)
     assert.deepEqual(account(c, '1').reading?.models, { Fable: { pct: 99, resetsAt: '2026-11-14T03:00:00Z' } })
-    // Fable sessions on 1 go on; the rest stay. Sessions on 2 have room in both.
-    assert.deepEqual(account(c, '1').moveToFor, { Fable: '2' })
-    assert.equal(account(c, '1').moveTo, undefined)
-    assert.equal(account(c, '2').moveToFor, undefined)
     c.report('1', { sevenDay: { pct: 31, resetsAt: '2026-11-14T03:00:00Z' }, at: w.now + 1 })
     assert.equal(account(c, '1').reading?.sevenDay?.pct, 31)
     assert.equal(account(c, '1').reading?.models?.Fable?.pct, 99)
@@ -627,28 +607,17 @@ describe('removing a login', () => {
     assert.equal(answer.status, 400)
   })
 
-  test('sessions on it move off first; then it is signed out and dropped', async () => {
+  test('it waits for the sessions on it to move off; then it is signed out and dropped', async () => {
     const w = new World()
     const c = await started(w, threeLogins(w))
     c.register({ id: 's', slot: SLOT2, isInteractive: true })
     await c.remove('2')
     assert.equal(account(c, '2').isRetiring, true)
-    assert.equal(account(c, '2').moveTo, '1')
     assert.deepEqual(w.signOuts, [])
     c.patchSession('s', { accountId: '1' })
     await settle()
     assert.deepEqual(w.signOuts, [SLOT2])
     assert.equal(c.state().accounts.some(a => a.id === '2'), false)
-  })
-
-  test('is refused while sessions use it and nothing can take over', async () => {
-    const w = new World()
-    const c = await started(w, threeLogins(w))
-    c.register({ id: 's', slot: SLOT2, isInteractive: true })
-    c.rejected('1')
-    c.rejected('3')
-    const answer = await c.handle({ method: 'POST', path: '/accounts/2/remove', query: {}, body: {} })
-    assert.equal(answer.status, 409)
   })
 })
 

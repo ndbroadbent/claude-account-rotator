@@ -38,7 +38,6 @@
         },
         "at": 1794217860000
       },
-      "isSpent": true,
       "sessionCount": 1,
       "somethingNew": "ignored"
     },
@@ -61,9 +60,7 @@
         },
         "at": 1794218330000
       },
-      "isSpent": false,
       "isRetiring": true,
-      "moveTo": "3",
       "sessionCount": 2
     },
     {
@@ -75,7 +72,6 @@
       "health": {
         "kind": "ok"
       },
-      "isSpent": false,
       "sessionCount": 0
     },
     {
@@ -98,7 +94,6 @@
         },
         "at": 1794211200000
       },
-      "isSpent": false,
       "sessionCount": 0
     },
     {

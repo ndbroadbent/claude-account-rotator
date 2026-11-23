@@ -120,14 +120,11 @@ public struct AccountState: Decodable, Sendable, Equatable, Identifiable {
   public var health: Health
   public var reading: Reading?
   public var expiresAt: Date?
-  public var isSpent: Bool
   public var isRetiring: Bool
-  public var moveTo: String?
   public var sessionCount: Int
 
   enum CodingKeys: String, CodingKey {
-    case id, slot, email, orgId, orgName, plan, tier, weight, health, reading, expiresAt, isSpent, isRetiring, moveTo,
-      sessionCount
+    case id, slot, email, orgId, orgName, plan, tier, weight, health, reading, expiresAt, isRetiring, sessionCount
   }
 
   public init(from decoder: Decoder) throws {
@@ -150,10 +147,14 @@ public struct AccountState: Decodable, Sendable, Equatable, Identifiable {
     health = c.lenient(Health.self, .health) ?? .other(kind: "")
     reading = c.lenient(Reading.self, .reading)
     expiresAt = c.epochDate(.expiresAt)
-    isSpent = c.lenient(Bool.self, .isSpent) ?? false
     isRetiring = c.lenient(Bool.self, .isRetiring) ?? false
-    moveTo = c.nonEmpty(.moveTo)
     sessionCount = c.lenient(Int.self, .sessionCount) ?? 0
+  }
+
+  /// Past the rotation's leave thresholds, as the mod counts them: 90% of the 5-hour window or 98% of the week.
+  /// A model's own week doesn't count here.
+  public func isSpent(at now: Date) -> Bool {
+    (reading?.fiveHour?.usedPct(at: now) ?? 0) >= 90 || (reading?.sevenDay?.usedPct(at: now) ?? 0) >= 98
   }
 
   /// "alex@example.com", or "Account 2" before the coordinator has read the profile.
