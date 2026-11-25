@@ -92,6 +92,10 @@ type World = {
   ran?: string[][]
   /** What the coordinator wrote to its log. */
   logs?: string[]
+  /** The socket refuses every request, as while the coordinator restarts. */
+  isDown?: boolean
+  /** The `since` of each GET /state the session sent, in order. */
+  polls?: string[]
 }
 
 /** Claude Code's words for a browser call that found no browser, as a session moved off its login gets them. */
@@ -141,7 +145,7 @@ function persisted(store: Record<string, unknown>): Persisted {
  * The coordinator, run in memory on the test's clock, over the same world: the
  * keychain or credentials files, the usage and profile endpoints, `claude auth`.
  */
-function coordinatorIn(w: World, clock: MockClock, store: Record<string, unknown>): Coordinator {
+function coordinatorIn(w: World, clock: MockClock, store: Record<string, unknown>, startedAt = NOW): Coordinator {
   const after = (ms: number, fn: () => void) => {
     let isCancelled = false
     void clock.sleep(ms).then(() => {
@@ -233,7 +237,7 @@ function coordinatorIn(w: World, clock: MockClock, store: Record<string, unknown
       ;(w.logs ??= []).push(text)
     },
   }
-  const coordinator = new Coordinator(deps, { version: VERSION, pid: 1, startedAt: NOW, isManaged: false }, persisted(store))
+  const coordinator = new Coordinator(deps, { version: VERSION, pid: 1, startedAt, isManaged: false }, persisted(store))
   void coordinator.start()
   return coordinator
 }
@@ -242,8 +246,7 @@ function coordinatorIn(w: World, clock: MockClock, store: Record<string, unknown
 function world(on: On, w: World, store: Record<string, unknown>): MockClock {
   const clock = mock.clock(on, { now: NOW })
   mock.env(on, { USER: 'tester', HOME, ...w.env })
-  const coordinator = coordinatorIn(w, clock, store)
-  w.coordinator = coordinator
+  w.coordinator = coordinatorIn(w, clock, store)
   let slot = w.env.CLAUDE_SECURESTORAGE_CONFIG_DIR ?? ''
   on('env.set', (_$, e) => {
     if (w.refuseEnv) return { deny: `env (managed): ${e.name} is not for plugins outside policy to change` }
@@ -273,8 +276,10 @@ function world(on: On, w: World, store: Record<string, unknown>): MockClock {
     // Claude Code aborts a `$.http.fetch` with no answer after 30 s: a long poll must ask for less.
     if (Number(url.searchParams.get('wait') ?? 0) >= 30_000) throw new Error(`a long poll waits past $.http.fetch's 30 s: ${e.url}`)
     const body = e.init.body === undefined ? undefined : JSON.parse(String(e.init.body))
+    if (w.isDown || w.coordinator === undefined) throw new Error(`connect ECONNREFUSED ${e.init.socketPath}`)
+    if (url.pathname === '/state') (w.polls ??= []).push(url.searchParams.get('since') ?? '')
     if (url.pathname === '/hello' && w.hello !== undefined) return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify(w.hello) } }
-    const answer = await coordinator.handle({ method: e.init.method ?? 'GET', path: url.pathname, query: Object.fromEntries(url.searchParams), body })
+    const answer = await w.coordinator.handle({ method: e.init.method ?? 'GET', path: url.pathname, query: Object.fromEntries(url.searchParams), body })
     return { value: { status: answer.status, ok: answer.status < 300, headers: {}, text: JSON.stringify(answer.body) } }
   })
   // Claude Code keeps a /login's sign-in where the session reads its own: the slot it is on.
@@ -2160,4 +2165,36 @@ test('a session that left a full account stays away while its reading wavers on 
   expect(w.envSets).toHaveLength(3)
   await read(94, 81_000)
   expect(w.envSets.map(e => e.value).at(-1)).toBe(slot(3))
+})
+
+test('after the coordinator restarts and counts its versions from the start again, a session follows the new one', async ($, on) => {
+  const w = fresh()
+  w.keychain['Claude Code-credentials'] = blob('tok-1')
+  w.keychain[await keychainItem(SLOT2)] = blob('tok-2')
+  w.usage['tok-1'] = [10, 30]
+  w.usage['tok-2'] = [10, 40]
+  const clock = world(on, w, TWO_LOGINS)
+  await start($, clock)
+  // The old coordinator has seen a lot: its version is well past where a new one starts.
+  for (let i = 1; i <= 20; i += 1) {
+    await w.coordinator?.handle({ method: 'POST', path: '/readings', query: {}, body: { accountId: '1', reading: { sevenDay: { pct: 30 + i }, at: NOW + i } } })
+  }
+  await clock.settle()
+  const before = w.coordinator?.state().version ?? 0
+  expect(before).toBeGreaterThan(20)
+
+  // Down past the long poll in flight, so the session's next request fails.
+  w.isDown = true
+  await clock.advance(30_000)
+  w.coordinator = coordinatorIn(w, clock, TWO_LOGINS, NOW + HOUR)
+  w.isDown = false
+  await clock.advance(10_000)
+
+  const now = w.coordinator.state().version
+  expect(now).toBeLessThan(before)
+  // It asks the new coordinator for changes after the new one's version, so the long poll waits instead of answering at once.
+  expect(w.polls?.at(-1)).toBe(String(now))
+  const polls = w.polls?.length ?? 0
+  await clock.advance(60_000)
+  expect((w.polls?.length ?? 0) - polls).toBeLessThan(10)
 })

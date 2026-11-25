@@ -2,6 +2,10 @@
 
 What each version of the account rotator changed. To get each one as Claude Code starts, turn on auto-update: in `/plugin`, open **Marketplaces**, pick **claude-account-rotator** and choose **Enable auto-update**. To update by hand, run `claude plugin marketplace update claude-account-rotator`, then `claude plugin update account-rotator@claude-account-rotator`, and start a new session.
 
+## 0.7.5 - 2026-11-26
+
+- **Sessions follow a coordinator that restarted.** A restarted coordinator counts its state versions from the start again. A session that lost the coordinator and found the new one kept asking for changes after its old, higher version, so each long poll answered at once: on a Mac with about 50 sessions, Quietdeck's node sat at 75 to 80% CPU, and the sessions' views went stale. Now a session takes any state from a coordinator that started at a different time from the one it last heard.
+
 ## 0.7.4 - 2026-11-23
 
 - **A session keeps away from an account it left full until the account has room again.** Once the rotation moves a session off an account because it filled (98% of its week, its Fable week for a Fable session, or 90% of a 5-hour window), it doesn't send that session back until the account reads 3 points below that line or the window resets. This ends the back-and-forth 0.7.3 cut short: an account whose week resets first and whose reading wavered between 97% and 98% pulled sessions back on every 97%. **Use now** still moves to it.

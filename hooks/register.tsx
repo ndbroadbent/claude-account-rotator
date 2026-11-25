@@ -116,6 +116,11 @@ let isConnectingChrome = false
 let session: { key: string; pid?: number; slot: string; cwd?: string; isInteractive: boolean } | undefined
 /** The state version this session last read, and the notices it has shown. */
 let version = 0
+/**
+ * When the coordinator whose state the session last took started. A restarted one counts its versions from the start
+ * again, so a lower version from it is news, not a late answer.
+ */
+let versionOf: number | undefined
 let lastNotice: number | undefined
 /** Claude Code's login, guessed for the Chrome extension, found no browser: not guessed again. */
 let chromeMiss: string | undefined
@@ -229,8 +234,9 @@ function patchSession($: Host, patch: { accountId?: string; isBlocked?: boolean;
  * posts the desktop notification.
  */
 async function applyState($: Host, state: SharedState, activeId?: string): Promise<void> {
-  if (state.version < version && state.coordinator.startedAt === (await getView($)).coordinator?.info?.startedAt) return
+  if (state.version < version && state.coordinator.startedAt === versionOf) return
   version = state.version
+  versionOf = state.coordinator.startedAt
   chromeMiss = state.chrome.miss
   const accounts: Account[] = state.accounts.map(a => ({
     id: a.id,
