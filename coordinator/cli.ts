@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url'
 import type { SharedState } from '../types/index.d.ts'
 import { cleanEnv, logPath, serve, socketPath, stateDir } from './server.ts'
 import { unitFile } from './service.ts'
-import { NODE_NAME, VERSION, compareVersions } from './version.ts'
+import { VERSION, compareVersions, isNodeName } from './version.ts'
 
 const LABEL = 'com.github.ndbroadbent.claude-account-rotator'
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -78,9 +78,9 @@ function call(method: string, urlPath: string, body?: unknown, timeoutMs = 5_000
 
 type Hello = { name?: string; version: string; pid: number; isManaged: boolean }
 
-/** Quietdeck's node serves the API here: it runs as long as the node does, and nothing here starts or stops it. */
-const isNode = (running: Hello | undefined): boolean => running?.name === NODE_NAME
-const NODE_SERVES = `Quietdeck's node serves the coordinator API here (${NODE_NAME})`
+/** A node serves the API here (Quietdeck's, or Fleetlayer's plugin): it runs as long as the node does, and nothing here starts or stops it. */
+const isNode = (running: Hello | undefined): boolean => isNodeName(running?.name)
+const nodeServes = (running: Hello): string => `A node serves the coordinator API here (${running.name ?? 'unnamed'})`
 
 async function hello(): Promise<Hello | undefined> {
   try {
@@ -187,7 +187,7 @@ function spawnDetached(): void {
 async function start(): Promise<void> {
   const running = await hello()
   if (running !== undefined) {
-    process.stdout.write(`running: ${isNode(running) ? `${NODE_NAME}, API ` : ''}${running.version} (pid ${running.pid})\n`)
+    process.stdout.write(`running: ${isNode(running) ? `${running.name}, API ` : ''}${running.version} (pid ${running.pid})\n`)
     return
   }
   if (isInstalled() && isMac) {
@@ -203,7 +203,7 @@ async function start(): Promise<void> {
 async function stopRunning(): Promise<void> {
   const running = await hello()
   if (running === undefined) return
-  if (isNode(running)) fail(`${NODE_SERVES}: it stops with the node`)
+  if (isNode(running)) fail(`${nodeServes(running)}: it stops with the node`)
   await call('POST', '/shutdown').catch(() => undefined)
   await waitFor(async () => (await hello()) === undefined, 10_000, 'the coordinator did not stop')
 }
@@ -289,7 +289,7 @@ async function install(): Promise<void> {
   if (!isMac && !isLinux) fail('install sets up a macOS LaunchAgent or a systemd user service; elsewhere, sessions start the coordinator themselves')
   fs.mkdirSync(stateDir(), { recursive: true, mode: 0o700 })
   const running = await hello()
-  if (isNode(running)) fail(`${NODE_SERVES}: turn off usage.serve_coordinator_api in its node.yaml before installing the coordinator`)
+  if (isNode(running)) fail(`${nodeServes(running)}: turn it off in its node's config before installing the coordinator`)
   if (running !== undefined && !running.isManaged) await stopRunning()
   copyApp()
   if (isLinux) return installUnit()
@@ -354,7 +354,7 @@ async function uninstall(): Promise<void> {
 async function upgrade(): Promise<void> {
   const running = await hello()
   if (running !== undefined && isNode(running)) {
-    process.stdout.write(`running: ${NODE_SERVES} (pid ${running.pid}); nothing to upgrade\n`)
+    process.stdout.write(`running: ${nodeServes(running)} (pid ${running.pid}); nothing to upgrade\n`)
     return
   }
   if (running !== undefined && compareVersions(running.version, VERSION) >= 0) {
@@ -372,7 +372,7 @@ async function status(): Promise<void> {
   const { body } = await call('GET', '/state')
   const state = body as SharedState
   const pct = (n: number | undefined) => (n === undefined ? '  ?' : `${Math.round(n)}%`.padStart(4))
-  const who = isNode(running) ? `${NODE_NAME}, coordinator API ${running.version} (pid ${running.pid})` : `coordinator ${running.version} (pid ${running.pid}${running.isManaged ? `, ${manager()}` : ''})`
+  const who = isNode(running) ? `${running.name}, coordinator API ${running.version} (pid ${running.pid})` : `coordinator ${running.version} (pid ${running.pid}${running.isManaged ? `, ${manager()}` : ''})`
   process.stdout.write(`${who}, ${state.sessions.length} sessions\n`)
   // As of November 2026 no plan reports a 5-hour window: shown only where one does.
   const hasFive = state.accounts.some(a => a.reading?.fiveHour !== undefined)

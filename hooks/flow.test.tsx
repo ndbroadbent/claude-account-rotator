@@ -868,6 +868,18 @@ test("Quietdeck's node serving the API is left running, whatever version it says
   expect((w.ran ?? []).filter(argv => argv.some(arg => arg.endsWith('/coordinator/cli.ts')))).toEqual([])
 })
 
+test("Fleetlayer's claude-auth-manager serving the API is left running, whatever version it says", async ($, on) => {
+  const w = fresh()
+  w.keychain['Claude Code-credentials'] = blob('tok-1')
+  w.usage['tok-1'] = [20, 30]
+  // Older than this mod: a coordinator of the rotator's own would be upgraded (`node cli.ts upgrade`, which the world refuses).
+  w.hello = { name: 'fleetlayer-claude-auth-manager', version: '0.7.1', pid: 9, startedAt: NOW, isManaged: true }
+  const clock = world(on, w, TWO_LOGINS)
+  await start($, clock)
+  expect(w.coordinator?.state().sessions.length).toBe(1)
+  expect((w.ran ?? []).filter(argv => argv.some(arg => arg.endsWith('/coordinator/cli.ts')))).toEqual([])
+})
+
 test('Remove refuses a login sessions are on while no other login can take them over, and leaves it on the list', async ($, on) => {
   const w = fresh()
   w.keychain['Claude Code-credentials'] = blob('tok-1')

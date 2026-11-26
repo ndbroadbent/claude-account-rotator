@@ -23,7 +23,7 @@ HTTP/1.1 over a Unix domain socket:
 
 | Method and path | Body | Answer |
 | --- | --- | --- |
-| `GET /hello` | | `{ name, version, pid, startedAt }`. `name` is `claude-account-rotator`, or `quietdeck-node` where Quietdeck's node serves the API. |
+| `GET /hello` | | `{ name, version, pid, startedAt }`. `name` is `claude-account-rotator`, or a node's name where a node serves the API: `quietdeck-node` (Quietdeck) or `fleetlayer-claude-auth-manager` (Fleetlayer's plugin). |
 | `GET /state?since=V&wait=MS&session=ID` | | `State`. With `since` equal to the current `version`, the answer waits until the state changes or `wait` ms pass (at most 55000), then answers the current state. `session` marks that session alive. A Claude Code session asks for 25000 at most: `$.http.fetch` aborts after 30 s. |
 | `POST /sessions` | `{ id, pid?, slot, cwd?, isInteractive }` | `{ accountId, state }`. Registers a session on the login whose `slot` it reads; an unknown slot becomes a new login. |
 | `PATCH /sessions/:id` | `{ accountId?, isBlocked?, isPending?, why? }` | `{ state }`. `why`: the reason for a move, or for the rotation stopping in the session, which the coordinator writes to its log. |
@@ -134,7 +134,9 @@ each session works that out from this state (`pickTarget` and `soonerTarget` in
 coordinator keeps `settings` and `chrome` for the mod, so every session sees a change
 at once, but doesn't act on them. This is the line along which Quietdeck's node takes
 the coordinator's work over: it serves this API on the same socket, and the mod keeps
-everything about rotating. A session leaves a monitor whose `/hello` says `quietdeck-node`
-as it is, whatever its version, and `cli.ts` won't stop it or install the coordinator
+everything about rotating. A session leaves a monitor whose `/hello` names a node (`quietdeck-node`, or
+`fleetlayer-claude-auth-manager`) as it is, whatever its version, and `cli.ts` won't stop it or install the coordinator
 beside it. While a coordinator holds `coordinator.lock`, the node only follows it, and it
-takes over once that coordinator stops.
+takes over once that coordinator stops. Fleetlayer's claude-auth-manager plugin serves it the
+same way on machines whose slots hold setup tokens from its hub: it asks a coordinator holding
+the lock to shut down and takes over, never polls, and takes readings from the hub.
