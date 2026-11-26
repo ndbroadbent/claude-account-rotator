@@ -96,6 +96,8 @@ type World = {
   isDown?: boolean
   /** The `since` of each GET /state the session sent, in order. */
   polls?: string[]
+  /** What GET /state adds as `managedBy`, as Fleetlayer's claude-auth-manager says it on a node of its auth hub. */
+  managedBy?: string
 }
 
 /** Claude Code's words for a browser call that found no browser, as a session moved off its login gets them. */
@@ -280,6 +282,11 @@ function world(on: On, w: World, store: Record<string, unknown>): MockClock {
     if (url.pathname === '/state') (w.polls ??= []).push(url.searchParams.get('since') ?? '')
     if (url.pathname === '/hello' && w.hello !== undefined) return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify(w.hello) } }
     const answer = await w.coordinator.handle({ method: e.init.method ?? 'GET', path: url.pathname, query: Object.fromEntries(url.searchParams), body })
+    if (w.managedBy !== undefined) {
+      const b = answer.body as Record<string, unknown>
+      if (url.pathname === '/state') answer.body = { ...b, managedBy: w.managedBy }
+      else if (typeof b.state === 'object' && b.state !== null) answer.body = { ...b, state: { ...b.state, managedBy: w.managedBy } }
+    }
     return { value: { status: answer.status, ok: answer.status < 300, headers: {}, text: JSON.stringify(answer.body) } }
   })
   // Claude Code keeps a /login's sign-in where the session reads its own: the slot it is on.
@@ -878,6 +885,30 @@ test("Fleetlayer's claude-auth-manager serving the API is left running, whatever
   await start($, clock)
   expect(w.coordinator?.state().sessions.length).toBe(1)
   expect((w.ran ?? []).filter(argv => argv.some(arg => arg.endsWith('/coordinator/cli.ts')))).toEqual([])
+})
+
+test('where something else manages the sign-ins, the band and pane offer no Sign in, Add or Remove, and say where they come from', async ($, on) => {
+  const w = fresh()
+  w.keychain['Claude Code-credentials'] = blob('tok-1')
+  // Account 2's slot holds no sign-in: the band names it, with no Sign in to press.
+  w.usage['tok-1'] = [20, 30]
+  w.managedBy = 'the auth hub'
+  const clock = world(on, w, TWO_LOGINS)
+  await start($, clock)
+  const pane = await $.ui.mount({ plugin: 'account-rotator', surface: 'terminal', component: 'Pane', requestId: 'claude-accounts', props: PANE_PROPS })
+  expect(await pane.find({ text: 'Sign-ins come from the auth hub' })).toBeDefined()
+  expect(await pane.findAll({ text: /^(Remove|\+ Add an account|Sign in)$/ })).toEqual([])
+  expect(await pane.find({ text: 'Rotate now' })).toBeDefined()
+  await pane.unmount()
+  const band = await $.ui.mount({
+    plugin: 'account-rotator',
+    surface: 'terminal',
+    component: 'AbovePrompt',
+    props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 9 }, view: {} },
+  })
+  expect(await band.find({ text: /Claude account 2 \(two@example\.com\) stopped working here \(.+\)\. Its sign-in comes from the auth hub\./ })).toBeDefined()
+  expect(await band.findAll({ text: /^Sign in/ })).toEqual([])
+  await band.unmount()
 })
 
 test('Remove refuses a login sessions are on while no other login can take them over, and leaves it on the list', async ($, on) => {

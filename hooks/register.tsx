@@ -278,6 +278,7 @@ async function applyState($: Host, state: SharedState, activeId?: string): Promi
       chromeAccountId: state.chrome.accountId,
       chromeAccountIds: state.chrome.accountIds,
       coordinator: { info: state.coordinator },
+      managedBy: state.managedBy,
       ...(activeId === undefined ? {} : { activeId }),
     }
   })

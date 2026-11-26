@@ -125,6 +125,8 @@ export type SharedState = {
   sessions: SessionInfo[]
   notices: Notice[]
   signIn?: { accountId: string; since: number }
+  /** Set when something else manages the sign-ins (Fleetlayer's auth hub): who, as the mod names it. The mod then offers no sign-in, add or remove, which the coordinator refuses. */
+  managedBy?: string
 }
 
 /**
@@ -157,6 +159,8 @@ export type View = {
   combined?: SharedState['combined']
   /** The coordinator as last reached; `error` while it can't be. */
   coordinator?: { info?: CoordinatorInfo; error?: string }
+  /** Who manages the sign-ins when the person doesn't (SharedState.managedBy). */
+  managedBy?: string
   /** The login this session sends its requests with. */
   activeId: string
   /**

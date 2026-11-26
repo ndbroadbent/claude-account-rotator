@@ -545,11 +545,15 @@ export function Band(ui: Ui, view: View, now: number, act: Actions) {
     return (
       <Box flexDirection="row" columnGap={2}>
         <Text color="error">
-          ⚠ Claude account {names} needs a sign-in{why?.kind === 'login-needed' ? ` (${why.why})` : ''}.
+          {view.managedBy === undefined
+            ? `⚠ Claude account ${names} needs a sign-in${why?.kind === 'login-needed' ? ` (${why.why})` : ''}.`
+            : `⚠ Claude account ${names} stopped working here${why?.kind === 'login-needed' ? ` (${why.why})` : ''}. Its sign-in comes from ${view.managedBy}.`}
         </Text>
-        <Button key="sign-in-all" variant="primary" hotkey="s" onPress={act.signInAll}>
-          {locked.length > 1 ? 'Sign in all' : 'Sign in'}
-        </Button>
+        {view.managedBy === undefined && (
+          <Button key="sign-in-all" variant="primary" hotkey="s" onPress={act.signInAll}>
+            {locked.length > 1 ? 'Sign in all' : 'Sign in'}
+          </Button>
+        )}
       </Box>
     )
   }
@@ -622,6 +626,7 @@ function lineEnd(ui: Ui, view: View, a: Account, act: Actions) {
   )
   if (view.retiring?.includes(a.id)) return [use(<Text dimColor>◌ removing…</Text>)]
   const remove =
+    view.managedBy === undefined &&
     a.slot !== '' &&
     health?.kind !== 'logging-in' &&
     (view.removing === a.id ? (
@@ -634,7 +639,7 @@ function lineEnd(ui: Ui, view: View, a: Account, act: Actions) {
       return [
         <Text color="error">⚠ {health.why}</Text>,
         remove,
-        use(<Button key={`sign-in-${a.id}`} variant="primary" onPress={() => act.signInOne(a.id)}>Sign in</Button>),
+        view.managedBy === undefined && use(<Button key={`sign-in-${a.id}`} variant="primary" onPress={() => act.signInOne(a.id)}>Sign in</Button>),
       ]
     case 'logging-in':
       return [use(<Text color="warning">◌ signing in…</Text>)]
@@ -773,9 +778,13 @@ export function Pane(ui: Ui, view: View, now: number, act: Actions) {
   const accounts = [
     ...view.accounts.map(a => accountRows(ui, view, a, now, act)),
     <Box key="add-row" flexDirection="row" columnGap={2}>
-      <Button key="add" onPress={act.add}>+ Add an account</Button>
+      {view.managedBy === undefined ? (
+        <Button key="add" onPress={act.add}>+ Add an account</Button>
+      ) : (
+        <Text key="managed" dimColor>{`Sign-ins come from ${view.managedBy}`}</Text>
+      )}
       {view.accounts.length > 1 && <Button key="rotate" onPress={act.rotate}>Rotate now</Button>}
-      {needsSignIn(view).length > 1 && <Button key="pane-sign-in-all" variant="primary" onPress={act.signInAll}>Sign in all</Button>}
+      {view.managedBy === undefined && needsSignIn(view).length > 1 && <Button key="pane-sign-in-all" variant="primary" onPress={act.signInAll}>Sign in all</Button>}
     </Box>,
   ]
   return (

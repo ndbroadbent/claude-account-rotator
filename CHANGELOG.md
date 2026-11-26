@@ -2,6 +2,10 @@
 
 What each version of the account rotator changed. To get each one as Claude Code starts, turn on auto-update: in `/plugin`, open **Marketplaces**, pick **claude-account-rotator** and choose **Enable auto-update**. To update by hand, run `claude plugin marketplace update claude-account-rotator`, then `claude plugin update account-rotator@claude-account-rotator`, and start a new session.
 
+## 0.7.7 - 2026-11-26
+
+- **No Sign in, Add or Remove where something else manages the sign-ins.** On a machine whose accounts come from Fleetlayer's auth hub, its claude-auth-manager refuses those, and its state now says who manages the sign-ins (`managedBy`). The pane then shows "Sign-ins come from the auth hub" in place of **+ Add an account** and drops each account's **Remove** and **Sign in**. An account that stops working is still named above the prompt, with where its sign-in comes from in place of a Sign in button.
+
 ## 0.7.6 - 2026-11-26
 
 - **Sessions leave Fleetlayer's claude-auth-manager alone.** Fleetlayer's plugin serves the coordinator API on machines whose accounts come from its auth hub (`/hello` says `fleetlayer-claude-auth-manager`). Sessions no longer try to upgrade it whatever its version, and `cli.ts` won't stop it or install the coordinator beside it, as for Quietdeck's node.

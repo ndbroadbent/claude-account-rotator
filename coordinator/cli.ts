@@ -80,7 +80,7 @@ type Hello = { name?: string; version: string; pid: number; isManaged: boolean }
 
 /** A node serves the API here (Quietdeck's, or Fleetlayer's plugin): it runs as long as the node does, and nothing here starts or stops it. */
 const isNode = (running: Hello | undefined): boolean => isNodeName(running?.name)
-const nodeServes = (running: Hello): string => `A node serves the coordinator API here (${running.name ?? 'unnamed'})`
+const nodeServes = (running: Hello | undefined): string => `A node serves the coordinator API here (${running?.name ?? 'unnamed'})`
 
 async function hello(): Promise<Hello | undefined> {
   try {

@@ -61,6 +61,7 @@ type State = {
   notices: Notice[]
   /** The browser sign-in under way. */
   signIn?: { accountId: string; since: number }
+  managedBy?: string // set when something else manages the sign-ins, as Fleetlayer's claude-auth-manager does for its auth hub ("the auth hub"); the mod then offers no Sign in, Add or Remove
 }
 
 type AccountState = {
