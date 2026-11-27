@@ -126,6 +126,16 @@ let lastNotice: number | undefined
 let chromeMiss: string | undefined
 /** The last reading reported, so a busy session doesn't report every response. */
 let reported: { id: string; reading: Reading } | undefined
+/** The node (Fleetlayer's or Quietdeck's) this session last found serving the coordinator API, if it was one. */
+let servedBy: string | undefined
+/** When that node stopped answering, while it's gone. */
+let nodeLostAt: number | undefined
+/**
+ * How long a session waits for a node it was using to come back before it starts a coordinator of its own. A node
+ * restarting (an upgrade) is back within seconds; a coordinator started in that gap holds the socket the node then has
+ * to take back.
+ */
+const NODE_GRACE_MS = 2 * 60_000
 
 // ---------------------------------------------------------------- the view
 
@@ -184,11 +194,22 @@ async function act($: Host, method: string, path: string, body?: unknown): Promi
 /**
  * Makes sure a coordinator this version or newer runs: starts one where none
  * answers, and upgrades an older one.
- * A node serving the same API (Quietdeck's, or Fleetlayer's claude-auth-manager) is left as it is.
+ * A node serving the same API (Quietdeck's, or Fleetlayer's claude-auth-manager) is left as it is, and one that
+ * stops answering gets NODE_GRACE_MS to come back before this starts a coordinator in its place.
  */
 async function ensureCoordinator($: Host): Promise<void> {
   const hello = await api<{ name?: string; version: string }>($, 'GET', '/hello').catch(() => undefined)
-  if (hello !== undefined && (isNodeName(hello.name) || compareVersions(hello.version, VERSION) >= 0)) return
+  if (hello !== undefined) {
+    nodeLostAt = undefined
+    servedBy = isNodeName(hello.name) ? hello.name : undefined
+    if (servedBy !== undefined || compareVersions(hello.version, VERSION) >= 0) return
+  } else if (servedBy !== undefined) {
+    const now = await $.clock.now()
+    nodeLostAt ??= now
+    if (now - nodeLostAt < NODE_GRACE_MS) throw new Error(`${servedBy} isn't answering; waiting for it to come back`)
+    servedBy = undefined
+    nodeLostAt = undefined
+  }
   const verb = hello === undefined ? 'start' : 'upgrade'
   let result
   try {
@@ -315,6 +336,7 @@ async function watch($: Host): Promise<void> {
       const state = await api<SharedState>($, 'GET', `/state?since=${version}&wait=${WAIT_MS}${key}`)
       if (failures > 0) await setView($, v => ({ ...v, coordinator: { info: state.coordinator } }))
       failures = 0
+      nodeLostAt = undefined
       if (session !== undefined && !state.sessions.some(s => s.id === session?.key)) await registerSession($)
       else if (state.version !== version) await applyState($, state)
       await settlePending($, false)

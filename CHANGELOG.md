@@ -2,6 +2,10 @@
 
 What each version of the account rotator changed. To get each one as Claude Code starts, turn on auto-update: in `/plugin`, open **Marketplaces**, pick **claude-account-rotator** and choose **Enable auto-update**. To update by hand, run `claude plugin marketplace update claude-account-rotator`, then `claude plugin update account-rotator@claude-account-rotator`, and start a new session.
 
+## 0.8.1 - 2026-11-27
+
+- **Sessions wait for a node that restarts.** Where Fleetlayer's claude-auth-manager or Quietdeck's node serves the coordinator API, a session that lost it started a coordinator of its own about two seconds later. When a node restarted for an upgrade, a session could start one in that gap, and the node had to take the socket back from it when it came up. Now a session gives a node it was using two minutes to come back before it starts a coordinator in its place. A coordinator of the rotator's own is still started again at once.
+
 ## 0.8.0 - 2026-11-27
 
 - **The menu bar app and `cli.ts install` are gone.** The menu bar app (`menubar/`) read the coordinator, and `install` set the coordinator up as a LaunchAgent on macOS or a systemd user service on Linux so it kept running for the app. On machines where Fleetlayer's claude-auth-manager or Quietdeck's node serves the coordinator API, neither is needed, and elsewhere the first session that needs the coordinator still starts it. A session that starts the coordinator removes a service an earlier version installed, and `cli.ts uninstall` removes it at once. To remove the app itself, delete `/Applications/Claude Accounts.app` and `~/Library/LaunchAgents/com.github.ndbroadbent.claude-accounts.menubar.plist`.

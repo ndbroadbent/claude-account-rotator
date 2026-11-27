@@ -887,6 +887,39 @@ test("Fleetlayer's claude-auth-manager serving the API is left running, whatever
   expect((w.ran ?? []).filter(argv => argv.some(arg => arg.endsWith('/coordinator/cli.ts')))).toEqual([])
 })
 
+const coordinatorRuns = (w: World) => (w.ran ?? []).filter(argv => argv.some(arg => arg.endsWith('/coordinator/cli.ts')))
+
+test('a node that stops answering gets two minutes to come back before a session starts a coordinator in its place', async ($, on) => {
+  const w = fresh()
+  w.keychain['Claude Code-credentials'] = blob('tok-1')
+  w.usage['tok-1'] = [20, 30]
+  w.hello = { name: 'fleetlayer-claude-auth-manager', version: '0.8.0', pid: 9, startedAt: NOW, isManaged: true }
+  const clock = world(on, w, TWO_LOGINS)
+  await start($, clock)
+
+  // The node restarts for an upgrade: a coordinator of the session's own would hold the socket it comes back to.
+  w.isDown = true
+  await clock.advance(30_000 + 100_000)
+  expect(coordinatorRuns(w)).toEqual([])
+
+  // Gone for good: the session starts one (which this world refuses to run).
+  await clock.advance(4 * 60_000)
+  expect(coordinatorRuns(w).map(argv => argv.at(-1))).toContain('start')
+})
+
+test("the rotator's own coordinator that stops answering is started again at once", async ($, on) => {
+  const w = fresh()
+  w.keychain['Claude Code-credentials'] = blob('tok-1')
+  w.usage['tok-1'] = [20, 30]
+  const clock = world(on, w, TWO_LOGINS)
+  await start($, clock)
+  expect(coordinatorRuns(w)).toEqual([])
+
+  w.isDown = true
+  await clock.advance(30_000 + 5_000)
+  expect(coordinatorRuns(w).map(argv => argv.at(-1))).toContain('start')
+})
+
 test('where something else manages the sign-ins, the band and pane offer no Sign in, Add or Remove, and say where they come from', async ($, on) => {
   const w = fresh()
   w.keychain['Claude Code-credentials'] = blob('tok-1')
