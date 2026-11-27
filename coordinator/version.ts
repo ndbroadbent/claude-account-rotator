@@ -1,5 +1,5 @@
 /** The mod's and the coordinator's version: a session whose mod is newer than the running coordinator upgrades it. */
-export const VERSION = '0.8.1'
+export const VERSION = '0.9.0'
 
 /**
  * What GET /hello names a node that serves this API in place of the coordinator and runs for as long as the node

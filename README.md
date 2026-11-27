@@ -62,11 +62,23 @@ Every session talks to one coordinator process over a Unix socket, `~/.claude/ac
 
 Where a session goes is the session's own decision, made from the coordinator's state, so every session picks alike. What only a session can do stays in the session too: pointing its own requests at an account, reading its responses' usage, and Claude in Chrome.
 
-The first session that needs the coordinator starts it in the background, and it exits once no session has used it for 30 minutes. A session with a newer version of the mod replaces an older coordinator by itself. Commands, run with `node ~/.claude/plugins/marketplaces/claude-account-rotator/coordinator/cli.ts <command>`: `status` (each account's usage and sessions), `start`, `stop` and `upgrade`. Its state and log are in `~/.claude/account-rotator`; the API is in [docs/coordinator-api.md](docs/coordinator-api.md).
+The first session that needs the coordinator starts it in the background, and it exits once it has had no sessions and no requests for 30 minutes. A session with a newer version of the mod replaces an older coordinator by itself. Commands, run with `node ~/.claude/plugins/marketplaces/claude-account-rotator/coordinator/cli.ts <command>`: `status` (each account's usage and sessions), `start`, `stop` and `upgrade`. Its state and log are in `~/.claude/account-rotator`; the API is in [docs/coordinator-api.md](docs/coordinator-api.md).
 
 On a machine where a node serves the same API, sessions use it and leave it running: [Fleetlayer](https://github.com/fleetlayer/fleetlayer)'s claude-auth-manager, which puts setup tokens from an auth hub in the account slots (the panel then says the sign-ins come from the auth hub, and offers no Sign in, Add or Remove), or Quietdeck's node.
 
 Versions before 0.8.0 could install the coordinator as a LaunchAgent or a systemd user service, for a menu bar app that's gone now. A session removes such a service when it next starts the coordinator, and `cli.ts uninstall` removes it at once.
+
+## Every account in your menu bar: CodexBar
+
+[CodexBar](https://github.com/steipete/CodexBar) can show each account's usage in the macOS menu bar, read from the coordinator. In CodexBar's Settings → Providers → Claude, turn on **Read accounts from claude-swap** and set the executable to:
+
+```
+~/.claude/plugins/marketplaces/claude-account-rotator/bin/account-rotator-claude-accounts
+```
+
+It prints the accounts and their usage in the account list format CodexBar reads from claude-swap. CodexBar can't switch accounts through it: the rotator picks each session's account. To see every account at once, set Settings → Menu → **Multi-account layout** to **Stacked**, and for Overview turn on Settings → Menu Bar → **Show all accounts in Overview**. With four accounts or more, CodexBar folds the ones with plenty left: open each account's card once and it stays open.
+
+It reads the coordinator and never starts one: the first Claude Code session does, and CodexBar's reads keep it running after that. It finds Node.js itself (the one the coordinator last ran with, then `PATH`, then the usual install places), since CodexBar's `PATH` may have none. It works the same where Fleetlayer's claude-auth-manager serves the API.
 
 ## Requirements
 

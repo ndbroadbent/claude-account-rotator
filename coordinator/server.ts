@@ -34,6 +34,8 @@ export function stateDir(): string {
 export const socketPath = (dir = stateDir()) => path.join(dir, 'coordinator.sock')
 export const statePath = (dir = stateDir()) => path.join(dir, 'state.json')
 export const logPath = (dir = stateDir()) => path.join(dir, 'coordinator.log')
+/** The Node.js the coordinator last ran with, for `bin/account-rotator-claude-accounts`. */
+export const nodePath = (dir = stateDir()) => path.join(dir, 'node')
 const lockPath = (dir = stateDir()) => path.join(dir, 'coordinator.lock')
 
 /**
@@ -249,6 +251,8 @@ export async function serve(options: ServeOptions): Promise<void> {
   }
   const sock = socketPath(dir)
   fs.rmSync(sock, { force: true })
+  // bin/account-rotator-claude-accounts runs with this Node: a GUI app's PATH (CodexBar's) often has none.
+  fs.writeFileSync(nodePath(dir), `${process.execPath}\n`, { mode: 0o600 })
   const deps = nodeDeps(dir, log)
   const coordinator = new Coordinator(deps, { version: VERSION, pid: process.pid, startedAt: Date.now(), isManaged: options.isManaged }, readPersisted(statePath(dir), log))
 

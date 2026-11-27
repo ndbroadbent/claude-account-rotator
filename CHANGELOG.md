@@ -2,6 +2,10 @@
 
 What each version of the account rotator changed. To get each one as Claude Code starts, turn on auto-update: in `/plugin`, open **Marketplaces**, pick **claude-account-rotator** and choose **Enable auto-update**. To update by hand, run `claude plugin marketplace update claude-account-rotator`, then `claude plugin update account-rotator@claude-account-rotator`, and start a new session.
 
+## 0.9.0 - 2026-11-27
+
+- **Every account's usage in CodexBar's menu bar.** `bin/account-rotator-claude-accounts` prints the accounts and their usage from the coordinator in the account list format CodexBar reads from claude-swap: in CodexBar's Settings → Providers → Claude, turn on **Read accounts from claude-swap** and set the executable to `~/.claude/plugins/marketplaces/claude-account-rotator/bin/account-rotator-claude-accounts`. The README has the settings that show every account at once. It works the same where Fleetlayer's claude-auth-manager serves the coordinator API.
+
 ## 0.8.1 - 2026-11-27
 
 - **Sessions wait for a node that restarts.** Where Fleetlayer's claude-auth-manager or Quietdeck's node serves the coordinator API, a session that lost it started a coordinator of its own about two seconds later. When a node restarted for an upgrade, a session could start one in that gap, and the node had to take the socket back from it when it came up. Now a session gives a node it was using two minutes to come back before it starts a coordinator in its place. A coordinator of the rotator's own is still started again at once.

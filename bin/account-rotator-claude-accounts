@@ -1,0 +1,23 @@
+#!/bin/sh
+# The Claude account rotator's accounts and usage for CodexBar (coordinator/account-list-cli.ts). CodexBar runs this
+# with its own environment, where PATH is often just /usr/bin:/bin:/usr/sbin:/sbin, so this finds a Node.js 22.18 or
+# later itself: the one the coordinator last ran with, then PATH, then the usual install places.
+here=$(cd "$(dirname "$0")" && pwd -P) || exit 1
+dir=${CLAUDE_ACCOUNT_ROTATOR_DIR:-$HOME/.claude/account-rotator}
+
+recent() {
+  "$1" -e 'const [a, b] = process.versions.node.split(".").map(Number); process.exit(a > 22 || (a === 22 && b >= 18) ? 0 : 1)' 2>/dev/null
+}
+
+for node in "$(cat "$dir/node" 2>/dev/null)" "$(command -v node 2>/dev/null)" /opt/homebrew/bin/node /usr/local/bin/node \
+  "$HOME/.local/share/mise/shims/node" "$HOME/.volta/bin/node" "$HOME/.asdf/shims/node"; do
+  if [ -n "$node" ] && [ -x "$node" ] && recent "$node"; then
+    exec "$node" "$here/../coordinator/account-list-cli.ts" "$@"
+  fi
+done
+
+case "$*" in
+  --version | -V | --help | -h | '') echo "account-rotator-claude-accounts: needs Node.js 22.18 or later, and found none" >&2; exit 1 ;;
+esac
+printf '%s\n' '{"schemaVersion":1,"error":{"type":"NodeNotFound","message":"account-rotator-claude-accounts needs Node.js 22.18 or later, and found none on PATH or in the usual places"}}'
+exit 1
