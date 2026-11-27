@@ -4,7 +4,6 @@ import { describe, test } from 'node:test'
 import type { Persisted, SignInRun, Stored, UsageAnswer } from './core.ts'
 import { BACKOFF_MS, Coordinator, FRESH_MS, MAX_WAIT_MS, POLL_MS, REFRESH_RETRY_MS, STALE_SESSION_MS, TICK_MS } from './core.ts'
 import { retryAfter } from './server.ts'
-import { unitFile, unitWord } from './service.ts'
 import { isSpent } from '../hooks/model.ts'
 import type { Identity } from '../hooks/model.ts'
 
@@ -645,23 +644,5 @@ describe('the API', () => {
     assert.equal(again.state().settings.rotateTo, 'order')
     assert.equal(again.state().chrome.accountId, '2')
     assert.deepEqual(again.state().chrome.accountIds, ['2'])
-  })
-})
-
-describe('the systemd user service', () => {
-  test('runs the app copy with the managed flag and restarts only after a crash, quoting what systemd would read otherwise', () => {
-    const text = unitFile({
-      args: ['/usr/bin/node', '/home/nathan/.claude/account-rotator/app/coordinator/cli.ts', 'serve', '--managed'],
-      env: { PATH: '/usr/local/bin:/usr/bin', HOME: '/home/nathan', LANG: 'en_NZ.UTF-8' },
-      workingDir: '/home/nathan/.claude/account-rotator',
-      log: '/home/nathan/.claude/account-rotator/systemd.log',
-    })
-    assert.match(text, /^ExecStart="\/usr\/bin\/node" "\/home\/nathan\/\.claude\/account-rotator\/app\/coordinator\/cli\.ts" "serve" "--managed"$/m)
-    assert.match(text, /^Environment="PATH=\/usr\/local\/bin:\/usr\/bin"$/m)
-    assert.match(text, /^WorkingDirectory=\/home\/nathan\/\.claude\/account-rotator$/m)
-    assert.match(text, /^Restart=on-failure$/m)
-    assert.match(text, /^StandardOutput=append:\/home\/nathan\/\.claude\/account-rotator\/systemd\.log$/m)
-    assert.match(text, /^WantedBy=default\.target$/m)
-    assert.equal(unitWord('a "b" 50% c\\d'), '"a \\"b\\" 50%% c\\\\d"')
   })
 })

@@ -2,7 +2,7 @@
 
 A [Claude Code](https://code.claude.com) mod for people with more than one Claude account. It shows each account's usage under the prompt, and moves your session to another account before the one in use runs out.
 
-This is a fork of [ivokund/claude-account-rotator](https://github.com/ivokund/claude-account-rotator) for people who run many sessions at once. One coordinator process reads every account's sign-in and polls its usage for all sessions, rather than each session doing it alone. A menu bar app shows the combined usage across your accounts. See [Many sessions](#many-sessions-the-coordinator) and [The menu bar app](#the-menu-bar-app).
+This is a fork of [ivokund/claude-account-rotator](https://github.com/ivokund/claude-account-rotator) for people who run many sessions at once. One coordinator process reads every account's sign-in and polls its usage for all sessions, rather than each session doing it alone. See [Many sessions](#many-sessions-the-coordinator).
 
 ![The footer up close as the account in use runs low; the session moves to another account and a notice says so; then the panel switches the footer's top row between bars, pies and braille](demo/demo.gif)
 
@@ -40,7 +40,7 @@ Click it for the panel: each account's usage and reset times, **Sign in**, **Use
 ## What it does
 
 - **Rotates.** Once the account in use is down to 2% of its week (or 10% of a 5-hour window, where a plan still reports one), the session moves to another account, and a notice says which and why. **Usage based rotation** in the panel picks which: by default the one whose week resets soonest, so room about to refill is used before it does; else the one with the most room, or the next in the list; or **disabled**, which leaves switching to you. A session doesn't go back to an account it left full until that account has 5% left again (13% of a 5-hour window), or the window resets: **Use now** still can. If the rotation moves one session 3 times in a minute anyway, it stops switching there for 15 minutes and says so.
-- **Knows Fable's own week.** Fable (as of November 2026) has a weekly limit of its own on top of the account's, and runs out first. A session on Fable also moves on once its account is down to 2% of its Fable week, and picks the next account by the smaller of the two; a session on Opus or Sonnet goes by the account's week alone, so it keeps using an account whose Fable week is spent. Claude Code's responses don't report the Fable week, so the coordinator reads it from the usage endpoint: every 5 minutes, and from 80% once a minute while Fable sessions are responding. The panel and the menu bar show each account's Fable week under its week. Past that limit, Claude bills usage credits if you've turned them on.
+- **Knows Fable's own week.** Fable (as of November 2026) has a weekly limit of its own on top of the account's, and runs out first. A session on Fable also moves on once its account is down to 2% of its Fable week, and picks the next account by the smaller of the two; a session on Opus or Sonnet goes by the account's week alone, so it keeps using an account whose Fable week is spent. Claude Code's responses don't report the Fable week, so the coordinator reads it from the usage endpoint: every 5 minutes, and from 80% once a minute while Fable sessions are responding. The panel shows each account's Fable week under its week. Past that limit, Claude bills usage credits if you've turned them on.
 - **Uses the week that resets first.** With **soonest reset** (the default), every session uses the account whose week resets soonest and still has room, not only once its own account is spent: at start-up (a session starts on Claude Code's own login), and whenever that changes, which is when an account fills or resets. Usage going up never moves a session, and an account has to reset over an hour sooner to move for. The other choices leave a session where it is until its account is spent.
 - **Recovers.** A turn that still hits a usage limit or a rejected sign-in switches accounts and asks Claude to carry on.
 - **Shows what is really in use.** If a switch doesn't take, the footer and panel go back to the old account, and the rotation stops trying the other one for that session.
@@ -62,24 +62,11 @@ Every session talks to one coordinator process over a Unix socket, `~/.claude/ac
 
 Where a session goes is the session's own decision, made from the coordinator's state, so every session picks alike. What only a session can do stays in the session too: pointing its own requests at an account, reading its responses' usage, and Claude in Chrome.
 
-The first session that needs the coordinator starts it in the background, and it exits once no session has used it for 30 minutes. To keep it running (the menu bar app needs this), install it as a LaunchAgent on macOS or a systemd user service on Linux:
+The first session that needs the coordinator starts it in the background, and it exits once no session has used it for 30 minutes. A session with a newer version of the mod replaces an older coordinator by itself. Commands, run with `node ~/.claude/plugins/marketplaces/claude-account-rotator/coordinator/cli.ts <command>`: `status` (each account's usage and sessions), `start`, `stop` and `upgrade`. Its state and log are in `~/.claude/account-rotator`; the API is in [docs/coordinator-api.md](docs/coordinator-api.md).
 
-```
-node ~/.claude/plugins/marketplaces/claude-account-rotator/coordinator/cli.ts install
-```
+On a machine where a node serves the same API, sessions use it and leave it running: [Fleetlayer](https://github.com/fleetlayer/fleetlayer)'s claude-auth-manager, which puts setup tokens from an auth hub in the account slots (the panel then says the sign-ins come from the auth hub, and offers no Sign in, Add or Remove), or Quietdeck's node.
 
-That copies the coordinator to `~/.claude/account-rotator/app`, so a plugin update doesn't move it. On macOS it runs from login. On Linux it's `~/.config/systemd/user/claude-account-rotator.service`, enabled and started, restarted if it crashes; it runs while you're logged in, or from boot once `loginctl enable-linger $USER` has turned lingering on, as on a server. A session with a newer version of the mod replaces an older coordinator by itself. Other commands: `status` (each account's usage and sessions), `start`, `stop`, `upgrade` and `uninstall`. Its state and log are in `~/.claude/account-rotator`; the API is in [docs/coordinator-api.md](docs/coordinator-api.md).
-
-## The menu bar app
-
-`menubar/` holds a small macOS menu bar app that reads the coordinator. The menu bar shows your combined weekly usage across every account, with ⚠ while an account needs a sign-in. An account whose plan still has a 5-hour window (as of November 2026, the $100 Max plan; Ultra, formerly Max 20x, dropped it) shows it on its own row in the panel, never in the menu bar. Each account counts by the size of its plan, as Anthropic sizes their weeks: an Ultra account (10x Pro) counts twice a Max one (5x Pro). Click it for each account's usage and reset times, **Sign in**, the rotation setting, the sessions by folder and the recent notices. A gear menu switches between used and left.
-
-```
-menubar/install.sh      # builds it, copies it to /Applications and starts it at login
-menubar/uninstall.sh
-```
-
-It needs the Xcode command line tools (Swift 6) and the coordinator installed as above.
+Versions before 0.8.0 could install the coordinator as a LaunchAgent or a systemd user service, for a menu bar app that's gone now. A session removes such a service when it next starts the coordinator, and `cli.ts uninstall` removes it at once.
 
 ## Requirements
 
@@ -176,7 +163,7 @@ A window Claude Code stops from switching can connect only as the account it is 
 
 ## Uninstall
 
-Remove each account in the panel, which signs it out. Run `menubar/uninstall.sh` if you installed the menu bar app, and `node ~/.claude/account-rotator/app/coordinator/cli.ts uninstall` if you installed the coordinator. Then run `claude plugin marketplace remove claude-account-rotator`, which uninstalls the mod, and delete `~/.claude/accounts` and `~/.claude/account-rotator`.
+Remove each account in the panel, which signs it out. If a version before 0.8.0 installed the coordinator as a service, run `node ~/.claude/plugins/marketplaces/claude-account-rotator/coordinator/cli.ts uninstall`. Then run `claude plugin marketplace remove claude-account-rotator`, which uninstalls the mod, and delete `~/.claude/accounts` and `~/.claude/account-rotator`.
 
 ## Terms
 
@@ -197,7 +184,6 @@ claude plugin validate .
 pnpm install
 pnpm test                 # the coordinator's tests (node --test), then the mod's (claude plugin test)
 pnpm typecheck
-(cd menubar && swift test)
 ```
 
 The mod's tests run the real coordinator in memory, over the same imitated keychain and usage endpoint.

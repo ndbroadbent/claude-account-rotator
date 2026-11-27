@@ -183,7 +183,7 @@ async function act($: Host, method: string, path: string, body?: unknown): Promi
 
 /**
  * Makes sure a coordinator this version or newer runs: starts one where none
- * answers (launchd's, where it is installed), and upgrades an older one.
+ * answers, and upgrades an older one.
  * A node serving the same API (Quietdeck's, or Fleetlayer's claude-auth-manager) is left as it is.
  */
 async function ensureCoordinator($: Host): Promise<void> {

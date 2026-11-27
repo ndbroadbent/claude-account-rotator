@@ -1,6 +1,6 @@
 // The coordinator under Node: the real keychain or credentials files, Anthropic's
 // usage and profile endpoints, `claude auth`, the state file, and the HTTP server
-// on a Unix socket that sessions and the menu bar app talk to.
+// on a Unix socket that sessions talk to.
 
 import { execFile, spawn } from 'node:child_process'
 import fs from 'node:fs'
@@ -39,7 +39,7 @@ const lockPath = (dir = stateDir()) => path.join(dir, 'coordinator.lock')
 /**
  * The environment `claude` children get: the coordinator's own, without what a
  * Claude Code session sets for itself (which login it reads, its API endpoint),
- * so a coordinator a session started behaves as one launchd started.
+ * so a coordinator a session started behaves alike whichever session started it.
  */
 export function cleanEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   return Object.fromEntries(

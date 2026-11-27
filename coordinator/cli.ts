@@ -1,11 +1,9 @@
 // The coordinator's command line: `node coordinator/cli.ts <command>`.
 //
-//   serve [--managed] [--idle-exit-ms N]   run it in the foreground (launchd or systemd runs this)
-//   start                                  make sure one runs: start the installed service, or one in the background
-//   upgrade                                replace a running coordinator with this version
-//   install                                copy this version to ~/.claude/account-rotator/app and run it at login:
-//                                          a LaunchAgent on macOS, a systemd user service on Linux
-//   uninstall                              stop running it at login
+//   serve [--idle-exit-ms N]   run it in the foreground
+//   start                      make sure one runs, in the background
+//   upgrade                    replace a running coordinator with this version
+//   uninstall                  remove the LaunchAgent or systemd user service a version before 0.8.0 installed
 //   status                                 what the running one knows
 //   stop                                   ask the running one to exit
 
@@ -18,12 +16,10 @@ import { fileURLToPath } from 'node:url'
 
 import type { SharedState } from '../types/index.d.ts'
 import { cleanEnv, logPath, serve, socketPath, stateDir } from './server.ts'
-import { unitFile } from './service.ts'
 import { VERSION, compareVersions, isNodeName } from './version.ts'
 
 const LABEL = 'com.github.ndbroadbent.claude-account-rotator'
 const HERE = path.dirname(fileURLToPath(import.meta.url))
-const ROOT = path.dirname(HERE)
 const plistPath = () => path.join(os.homedir(), 'Library', 'LaunchAgents', `${LABEL}.plist`)
 const UNIT = 'claude-account-rotator.service'
 const unitPath = () => path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'systemd', 'user', UNIT)
@@ -190,11 +186,8 @@ async function start(): Promise<void> {
     process.stdout.write(`running: ${isNode(running) ? `${running.name}, API ` : ''}${running.version} (pid ${running.pid})\n`)
     return
   }
-  if (isInstalled() && isMac) {
-    const kick = launchctl('kickstart', `${domain()}/${LABEL}`)
-    if (!kick.ok) launchctl('bootstrap', domain(), plistPath())
-  } else if (isInstalled()) systemctl('start', UNIT)
-  else spawnDetached()
+  removeService()
+  spawnDetached()
   await waitFor(async () => (await hello()) !== undefined, 30_000, 'the coordinator did not start')
   const started = await hello()
   process.stdout.write(`started: ${started?.version} (pid ${started?.pid})\n`)
@@ -208,146 +201,33 @@ async function stopRunning(): Promise<void> {
   await waitFor(async () => (await hello()) === undefined, 10_000, 'the coordinator did not stop')
 }
 
-/** The variables the service runs with: what a session's `claude` children need, and nothing of the session's own. */
-function serviceEnv(): Record<string, string> {
-  const env = cleanEnv()
-  return {
-    PATH: env.PATH ?? '/usr/bin:/bin:/usr/sbin:/sbin',
-    HOME: os.homedir(),
-    USER: env.USER ?? os.userInfo().username,
-    ...(env.LANG === undefined ? {} : { LANG: env.LANG }),
-    ...(env.CLAUDE_ACCOUNT_ROTATOR_DIR === undefined ? {} : { CLAUDE_ACCOUNT_ROTATOR_DIR: env.CLAUDE_ACCOUNT_ROTATOR_DIR }),
+/**
+ * Removes the LaunchAgent or systemd user service that `install` set up before
+ * 0.8.0, with its copy of the coordinator: a node (Fleetlayer's or Quietdeck's)
+ * serves the API on these machines now, and elsewhere sessions start the
+ * coordinator themselves. A coordinator it ran goes on until it's stopped.
+ */
+function removeService(): boolean {
+  let removed = false
+  if (isLinux && fs.existsSync(unitPath())) {
+    systemctl('disable', UNIT)
+    fs.rmSync(unitPath(), { force: true })
+    systemctl('daemon-reload')
+    removed = true
   }
-}
-
-const serviceArgs = () => [process.execPath, path.join(appDir(), 'coordinator', 'cli.ts'), 'serve', '--managed']
-
-/** The systemd user service, run from the app copy. */
-function unit(): string {
-  return unitFile({ args: serviceArgs(), env: serviceEnv(), workingDir: stateDir(), log: path.join(stateDir(), 'systemd.log') })
-}
-
-const xml = (s: string) => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
-
-function plist(): string {
-  const vars = serviceEnv()
-  const args = serviceArgs()
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>${LABEL}</string>
-  <key>ProgramArguments</key>
-  <array>
-${args.map(a => `    <string>${xml(a)}</string>`).join('\n')}
-  </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-${Object.entries(vars)
-  .map(([k, v]) => `    <key>${xml(k)}</key><string>${xml(v)}</string>`)
-  .join('\n')}
-  </dict>
-  <key>WorkingDirectory</key><string>${xml(stateDir())}</string>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key>
-  <dict>
-    <key>SuccessfulExit</key><false/>
-  </dict>
-  <key>ThrottleInterval</key><integer>10</integer>
-  <key>StandardOutPath</key><string>${xml(path.join(stateDir(), 'launchd.log'))}</string>
-  <key>StandardErrorPath</key><string>${xml(path.join(stateDir(), 'launchd.log'))}</string>
-</dict>
-</plist>
-`
-}
-
-/** Copies the files the coordinator runs from to a fixed place, so a plugin update's new folder doesn't move it. */
-function copyApp(): void {
-  const target = appDir()
-  const fresh = `${target}.new`
-  fs.rmSync(fresh, { recursive: true, force: true })
-  const files = [
-    ...fs
-      .readdirSync(path.join(ROOT, 'coordinator'))
-      .filter(f => f.endsWith('.ts') && !f.endsWith('.spec.ts'))
-      .map(f => path.join('coordinator', f)),
-    path.join('hooks', 'model.ts'),
-    path.join('types', 'index.d.ts'),
-    'package.json',
-  ]
-  for (const file of files) {
-    const from = path.join(ROOT, file)
-    if (!fs.existsSync(from)) fail(`${from} is missing: run this from the plugin's folder`)
-    fs.mkdirSync(path.dirname(path.join(fresh, file)), { recursive: true })
-    fs.copyFileSync(from, path.join(fresh, file))
+  if (isMac && fs.existsSync(plistPath())) {
+    // bootout stops the coordinator launchd runs; it exits with its long polls cut, and sessions start another.
+    launchctl('bootout', `${domain()}/${LABEL}`)
+    fs.rmSync(plistPath(), { force: true })
+    removed = true
   }
-  fs.rmSync(target, { recursive: true, force: true })
-  fs.renameSync(fresh, target)
-}
-
-async function install(): Promise<void> {
-  if (!isMac && !isLinux) fail('install sets up a macOS LaunchAgent or a systemd user service; elsewhere, sessions start the coordinator themselves')
-  fs.mkdirSync(stateDir(), { recursive: true, mode: 0o700 })
-  const running = await hello()
-  if (isNode(running)) fail(`${nodeServes(running)}: turn it off in its node's config before installing the coordinator`)
-  if (running !== undefined && !running.isManaged) await stopRunning()
-  copyApp()
-  if (isLinux) return installUnit()
-  fs.mkdirSync(path.dirname(plistPath()), { recursive: true })
-  fs.writeFileSync(plistPath(), plist())
-  launchctl('bootout', `${domain()}/${LABEL}`)
-  await waitFor(async () => (await hello()) === undefined, 10_000, 'the old coordinator did not stop')
-  // launchd goes on removing the old job after its process exits, and refuses a bootstrap meanwhile ("5: Input/output error").
-  await waitFor(async () => !launchctl('print', `${domain()}/${LABEL}`).ok, 15_000, 'launchd did not remove the old coordinator job')
-  let boot = launchctl('bootstrap', domain(), plistPath())
-  for (let tries = 1; !boot.ok && tries < 5; tries += 1) {
-    await new Promise(resolve => setTimeout(resolve, 1_000))
-    boot = launchctl('bootstrap', domain(), plistPath())
-  }
-  if (!boot.ok) fail(`launchctl bootstrap failed: ${boot.output.trim()}`)
-  await waitFor(async () => (await hello())?.version === VERSION, 30_000, `coordinator ${VERSION} did not start`)
-  process.stdout.write(`installed: coordinator ${VERSION} runs at login (${plistPath()})\n`)
-}
-
-/** Linux: writes the user service, and (re)starts it on this version. */
-async function installUnit(): Promise<void> {
-  fs.mkdirSync(path.dirname(unitPath()), { recursive: true })
-  fs.writeFileSync(unitPath(), unit())
-  const reload = systemctl('daemon-reload')
-  if (!reload.ok) fail(`systemctl --user daemon-reload failed (is a user systemd manager running?): ${reload.output.trim()}`)
-  const enable = systemctl('enable', UNIT)
-  if (!enable.ok) fail(`systemctl --user enable failed: ${enable.output.trim()}`)
-  // restart, not start: an upgrade replaces the one running.
-  const restart = systemctl('restart', UNIT)
-  if (!restart.ok) fail(`systemctl --user restart failed: ${restart.output.trim()}`)
-  await waitFor(async () => (await hello())?.version === VERSION, 30_000, `coordinator ${VERSION} did not start (see ${path.join(stateDir(), 'systemd.log')})`)
-  const user = os.userInfo().username
-  const linger = execFileSyncQuiet('loginctl', ['show-user', user, '--property=Linger', '--value'])
-  const note = linger === 'yes' ? 'runs at boot (lingering is on)' : `runs while ${user} is logged in; \`loginctl enable-linger ${user}\` runs it from boot`
-  process.stdout.write(`installed: coordinator ${VERSION} ${note} (${unitPath()})\n`)
-}
-
-/** A command's trimmed output, or undefined when it fails or is missing. */
-function execFileSyncQuiet(cmd: string, args: string[]): string | undefined {
-  try {
-    return execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
-  } catch {
-    return undefined
-  }
+  fs.rmSync(appDir(), { recursive: true, force: true })
+  if (removed) process.stdout.write('removed the coordinator service an earlier version installed: it no longer runs at login\n')
+  return removed
 }
 
 async function uninstall(): Promise<void> {
-  if (isLinux && fs.existsSync(unitPath())) {
-    systemctl('disable', '--now', UNIT)
-    fs.rmSync(unitPath(), { force: true })
-    systemctl('daemon-reload')
-  }
-  if (fs.existsSync(plistPath())) {
-    launchctl('bootout', `${domain()}/${LABEL}`)
-    fs.rmSync(plistPath(), { force: true })
-  }
-  fs.rmSync(appDir(), { recursive: true, force: true })
-  process.stdout.write('uninstalled: the coordinator no longer runs at login (its state stays in ~/.claude/account-rotator)\n')
+  if (!removeService()) process.stdout.write('nothing to remove: no coordinator service is installed\n')
 }
 
 /** Replaces a running coordinator older than this one; a newer one stays. */
@@ -361,7 +241,6 @@ async function upgrade(): Promise<void> {
     process.stdout.write(`running: ${running.version}, not older than ${VERSION}\n`)
     return
   }
-  if (isInstalled()) return install()
   await stopRunning()
   await start()
 }
@@ -409,7 +288,7 @@ async function main(): Promise<void> {
     case 'upgrade':
       return withLock(upgrade)
     case 'install':
-      return withLock(install)
+      return fail('install was retired in 0.8.0: the first session that needs the coordinator starts it, and a Fleetlayer or Quietdeck node serves it where one runs')
     case 'uninstall':
       return withLock(uninstall)
     case 'status':
@@ -417,7 +296,7 @@ async function main(): Promise<void> {
     case 'stop':
       return stopRunning()
     default:
-      fail('usage: node coordinator/cli.ts serve|start|upgrade|install|uninstall|status|stop')
+      fail('usage: node coordinator/cli.ts serve|start|upgrade|uninstall|status|stop')
   }
 }
 

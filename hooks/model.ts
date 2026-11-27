@@ -130,7 +130,7 @@ export function limitingWindow(r: Reading | undefined): 'fiveHour' | 'sevenDay' 
   return r?.fiveHour !== undefined ? 'fiveHour' : 'sevenDay'
 }
 
-/** Whether any login reports a 5-hour window: without one, the footer, pane and menu bar show only the week. */
+/** Whether any login reports a 5-hour window: without one, the footer and pane show only the week. */
 export function hasFiveHour(readings: Readonly<Record<string, Reading>>): boolean {
   return Object.values(readings).some(r => r.fiveHour !== undefined)
 }

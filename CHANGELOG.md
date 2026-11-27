@@ -2,6 +2,10 @@
 
 What each version of the account rotator changed. To get each one as Claude Code starts, turn on auto-update: in `/plugin`, open **Marketplaces**, pick **claude-account-rotator** and choose **Enable auto-update**. To update by hand, run `claude plugin marketplace update claude-account-rotator`, then `claude plugin update account-rotator@claude-account-rotator`, and start a new session.
 
+## 0.8.0 - 2026-11-27
+
+- **The menu bar app and `cli.ts install` are gone.** The menu bar app (`menubar/`) read the coordinator, and `install` set the coordinator up as a LaunchAgent on macOS or a systemd user service on Linux so it kept running for the app. On machines where Fleetlayer's claude-auth-manager or Quietdeck's node serves the coordinator API, neither is needed, and elsewhere the first session that needs the coordinator still starts it. A session that starts the coordinator removes a service an earlier version installed, and `cli.ts uninstall` removes it at once. To remove the app itself, delete `/Applications/Claude Accounts.app` and `~/Library/LaunchAgents/com.github.ndbroadbent.claude-accounts.menubar.plist`.
+
 ## 0.7.7 - 2026-11-26
 
 - **No Sign in, Add or Remove where something else manages the sign-ins.** On a machine whose accounts come from Fleetlayer's auth hub, its claude-auth-manager refuses those, and its state now says who manages the sign-ins (`managedBy`). The pane then shows "Sign-ins come from the auth hub" in place of **+ Add an account** and drops each account's **Remove** and **Sign in**. An account that stops working is still named above the prompt, with where its sign-in comes from in place of a Sign in button.

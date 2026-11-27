@@ -2,8 +2,9 @@
 // reads each login's sign-in, polls usage once per login (not once per session),
 // runs browser sign-ins one at a time, keeps the settings and counts the
 // sessions on each login. Where a session goes is the mod's to decide, from
-// this state (Quietdeck's node takes this file's work over). Sessions and the
-// menu bar app reach it over HTTP on a Unix socket (server.ts); this file is
+// this state (Fleetlayer's claude-auth-manager or Quietdeck's node takes this
+// file's work over where one runs). Sessions reach it over HTTP on a Unix
+// socket (server.ts); this file is
 // plain TypeScript with everything outside it passed in, so tests drive it
 // in memory.
 

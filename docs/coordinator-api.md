@@ -6,7 +6,7 @@ which login. It is the only process that reads the logins' tokens and the only o
 that calls Anthropic's usage and profile endpoints, so the cost of running 30
 sessions is one poller, not thirty.
 
-Clients: the Claude Code mod (one per session) and the macOS menu bar app.
+Clients: the Claude Code mod (one per session) and `cli.ts status`. Fleetlayer's claude-auth-manager and Quietdeck's node serve the same API (`/hello` names them), and sessions leave them running.
 
 ## Transport
 
