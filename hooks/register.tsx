@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, McpToolResult, Register, SessionRateLimit, Timer } from 'claude-code'
+import type { EngineInterface, McpToolResult, On, Register, SessionRateLimit, Timer } from 'claude-code'
 
 import type { Account, FooterStyle, Reading, RotateTo, SharedState, View, Work } from '../types'
 import { VERSION, compareVersions, isNodeName } from '../coordinator/version'
@@ -110,6 +110,8 @@ let lastRequestAt: number | undefined
  * wait for days; with none running, the rotation may move it on again.
  */
 const turns = new Set<string>()
+/** The `chrome` option: off, the mod leaves Claude in Chrome alone, never connects it or moves a session for it, and shows nothing about it. */
+let isChromeOn = true
 /** Connect is under way: the rotation waits for it, and browser calls are held back. */
 let isConnectingChrome = false
 /** This session as the coordinator knows it: its id there, and the details it registers with. */
@@ -296,8 +298,7 @@ async function applyState($: Host, state: SharedState, activeId?: string): Promi
       combined: state.combined,
       footer: state.settings.footer,
       rotateTo: state.settings.rotateTo,
-      chromeAccountId: state.chrome.accountId,
-      chromeAccountIds: state.chrome.accountIds,
+      ...(isChromeOn ? { chromeAccountId: state.chrome.accountId, chromeAccountIds: state.chrome.accountIds } : {}),
       coordinator: { info: state.coordinator },
       managedBy: state.managedBy,
       ...(activeId === undefined ? {} : { activeId }),
@@ -894,7 +895,7 @@ async function noteChrome($: Host, as: Account, answer: ChromeAnswer): Promise<v
  */
 async function keepChrome($: Host): Promise<void> {
   const view = await getView($)
-  if (view.chrome !== undefined || view.hasChrome === false || isConnectingChrome) return
+  if (!isChromeOn || view.chrome !== undefined || view.hasChrome === false || isConnectingChrome) return
   // Until a switch lands, the connection could be made as either login.
   if (movedAt !== undefined && (await $.clock.now()) - movedAt < SETTLE_MS) return
   const active = view.accounts.find(a => a.id === view.activeId)
@@ -1204,14 +1205,15 @@ async function boot($: Host, isInteractive: boolean): Promise<void> {
   }
   await checkSwitching($, slot)
   // First, while the session can still move: the rotation waits for it.
-  if (isInteractive && shouldConnectAtOpen(await getView($))) {
+  if (isChromeOn && isInteractive && shouldConnectAtOpen(await getView($))) {
     void connectChrome($, true).catch(error => debug($, `Chrome connect failed: ${String(error)}`))
   }
   await maybeRotate($, true)
   void watch($).catch(error => debug($, `stopped following the coordinator: ${String(error)}`))
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  isChromeOn = options.chrome !== false
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     // The coordinator's own `claude -p /usage` run, which only refreshes a login's token: no session to join or move.
@@ -1290,24 +1292,7 @@ export const register: Register = on => {
     return ran
   }).catch(($, e, next) => next(e))
 
-  // While Connect is under way a browser call would connect as the login being left: Claude waits, and is told when to carry on.
-  on('tool.check', { tool: CHROME_TOOL }, async ($, e, next) => {
-    if (!isConnectingChrome || isAskingChrome) return next(e)
-    if (e.tool_use_id !== undefined) isChromeAwaited = true
-    return { decision: 'deny' as const, reason: chromeNote(await getView($), 'held') }
-  }).catch(($, e, next) => next(e))
-
-  // Claude Code's words for a browser call that found no browser send the person to /login, which here signs in the wrong account.
-  on('tool.call', { tool: CHROME_TOOL }, async ($, e, next) => {
-    const done = await next(e)
-    // The mod's own question to Claude in Chrome is answered where it asked.
-    if (done.deny !== undefined || isAskingChrome) return done
-    const note = await onBrowserCall($, isUnansweredCall(e.tool, done.text ?? '', done.isError === true)).catch(async error => {
-      await debug($, `browser call handling failed: ${String(error)}`)
-      return undefined
-    })
-    return note === undefined ? done : { ...done, context: [...(done.context ?? []), note] }
-  }).catch(($, e, next) => next(e))
+  if (isChromeOn) registerChrome(on)
 
   on('ui.close', async ($, e, next) => {
     if (e.id === PANE) isPaneShown = false
@@ -1330,4 +1315,26 @@ export const register: Register = on => {
     const view = await getView($)
     return Pane($.ui.resolve(e), view, await $.clock.now(), actions($))
   })
+}
+
+/** Claude in Chrome's calls, with the `chrome` option on. */
+function registerChrome(on: On): void {
+  // While Connect is under way a browser call would connect as the login being left: Claude waits, and is told when to carry on.
+  on('tool.check', { tool: CHROME_TOOL }, async ($, e, next) => {
+    if (!isConnectingChrome || isAskingChrome) return next(e)
+    if (e.tool_use_id !== undefined) isChromeAwaited = true
+    return { decision: 'deny' as const, reason: chromeNote(await getView($), 'held') }
+  }).catch(($, e, next) => next(e))
+
+  // Claude Code's words for a browser call that found no browser send the person to /login, which here signs in the wrong account.
+  on('tool.call', { tool: CHROME_TOOL }, async ($, e, next) => {
+    const done = await next(e)
+    // The mod's own question to Claude in Chrome is answered where it asked.
+    if (done.deny !== undefined || isAskingChrome) return done
+    const note = await onBrowserCall($, isUnansweredCall(e.tool, done.text ?? '', done.isError === true)).catch(async error => {
+      await debug($, `browser call handling failed: ${String(error)}`)
+      return undefined
+    })
+    return note === undefined ? done : { ...done, context: [...(done.context ?? []), note] }
+  }).catch(($, e, next) => next(e))
 }

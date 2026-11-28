@@ -2,6 +2,10 @@
 
 What each version of the account rotator changed. To get each one as Claude Code starts, turn on auto-update: in `/plugin`, open **Marketplaces**, pick **claude-account-rotator** and choose **Enable auto-update**. To update by hand, run `claude plugin marketplace update claude-account-rotator`, then `claude plugin update account-rotator@claude-account-rotator`, and start a new session.
 
+## 0.10.0 - 2026-11-28
+
+- **Claude in Chrome support can be turned off.** A new option, **Claude in Chrome support** in `/config` (`chrome`, on by default). Off, sessions never move to the Chrome extension's account as they open or when the connection drops, the mod doesn't touch browser calls, and the panel's Chrome box, the Chrome line above the prompt and the Chrome mark on an account go. For anyone whose agents use another browser tool.
+
 ## 0.9.0 - 2026-11-27
 
 - **Every account's usage in CodexBar's menu bar.** `bin/account-rotator-claude-accounts` prints the accounts and their usage from the coordinator in the account list format CodexBar reads from claude-swap: in CodexBar's Settings → Providers → Claude, turn on **Read accounts from claude-swap** and set the executable to `~/.claude/plugins/marketplaces/claude-account-rotator/bin/account-rotator-claude-accounts`. The README has the settings that show every account at once. It works the same where Fleetlayer's claude-auth-manager serves the coordinator API.

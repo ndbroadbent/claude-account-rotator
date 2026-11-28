@@ -1872,6 +1872,26 @@ test('a session without Claude in Chrome is asked once, and its pane has no Chro
   await pane.unmount()
 })
 
+test('with the chrome option off, a session never visits the extension\'s account or asks Claude in Chrome anything, leaves browser calls alone, and shows no Chrome box or band', { options: { chrome: false } }, async ($, on) => {
+  const w = fresh()
+  w.chrome = { extensions: [SLOT2] }
+  await spentTwo(w)
+  const clock = world(on, w, { ...TWO_LOGINS, 'chrome-account': '2' })
+  await start($, clock)
+  await clock.advance(36_000)
+  expect(slots(w)).toEqual([])
+  expect(w.chromeAsked).toEqual([])
+  expect(w.commands).toEqual([])
+  expect((await $.tool.check({ tool: 'mcp__claude-in-chrome__navigate', input: {} })).decision).toBe('allow')
+  const band = await mountBand($)
+  expect(await band.find({ text: /Chrome/ })).toBeUndefined()
+  await band.unmount()
+  const pane = await mountPane($)
+  expect(await pane.find({ key: 'chrome-row-2' })).toBeUndefined()
+  expect(await pane.find({ text: /Chrome/ })).toBeUndefined()
+  await pane.unmount()
+})
+
 // As of November 2026 Claude has no 5-hour limit: the usage endpoint and responses report the week alone.
 
 test('with only a weekly limit, the footer shows one row, the week, with its sign-in mark, and the pane only weeks', async ($, on) => {

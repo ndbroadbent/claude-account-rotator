@@ -161,6 +161,8 @@ The Claude extension in Chrome is signed in to one claude.ai account and answers
 
 A window Claude Code stops from switching can connect only as the account it is on. Where that isn't the extension's, the line above the prompt gives the command that brings the conversation back in a new session, which starts free to switch: `claude --resume <id>`.
 
+**Not using Claude in Chrome?** Turn off **Claude in Chrome support** in `/config` (the option `chrome` under `pluginConfigs` in `~/.claude/settings.json`). Sessions then never visit another account for Chrome or reconnect it, the mod leaves browser calls alone, and the panel has no Chrome box. The rotation is unchanged.
+
 ## How it works
 
 - **On a machine with no browser** (a server you reach over SSH), the panel's sign-in can't finish: `claude auth login` waits for a browser on that machine. Sign in from a terminal there instead. Account 1 is `claude auth login`. For another account, press **+ Add an account** (or **Sign in** on its row) to make its folder, then run, with its number:
